@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.core.security import crear_access_token, hash_password
-from app.db.models import Base, RolUsuario, Usuario
+from app.db.models import Base, Ciudadano, RolUsuario, Usuario
 from app.db.session import get_db
 from app.main import app
 
@@ -42,6 +42,20 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def ciudadano(db_session: AsyncSession) -> Ciudadano:
+    persona = Ciudadano(
+        documento="12345678",
+        nombre="Juan Pérez",
+        email="juan.perez@test.com",
+        telefono="+5491122334455",
+    )
+    db_session.add(persona)
+    await db_session.commit()
+    await db_session.refresh(persona)
+    return persona
 
 
 @pytest.fixture

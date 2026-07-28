@@ -12,6 +12,21 @@ async def obtener_caso_por_id(db: AsyncSession, caso_id: uuid.UUID) -> Caso | No
     return await db.get(Caso, caso_id)
 
 
+async def obtener_caso_abierto_de_ciudadano(
+    db: AsyncSession, ciudadano_id: uuid.UUID
+) -> Caso | None:
+    consulta = (
+        select(Caso)
+        .where(
+            Caso.ciudadano_id == ciudadano_id,
+            Caso.estado.in_([EstadoCaso.abierto, EstadoCaso.en_progreso]),
+        )
+        .order_by(Caso.updated_at.desc())
+        .limit(1)
+    )
+    return (await db.execute(consulta)).scalars().first()
+
+
 async def listar_casos(db: AsyncSession, *, estado: EstadoCaso | None = None) -> list[Caso]:
     consulta = select(Caso).order_by(Caso.created_at.desc())
     if estado is not None:

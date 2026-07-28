@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     redis_url: str = ""
 
     anthropic_api_key: str = ""
+    agente_modelo_intake: str = "claude-haiku-4-5-20251001"
+    agente_modelo_ejecutor: str = "claude-sonnet-5"
+    agente_umbral_confianza: float = 0.6
 
     jwt_secret_key: str = ""
     jwt_access_token_expire_hours: int = 8
