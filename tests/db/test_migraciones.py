@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.core.config import settings
 
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
-TABLAS_ESPERADAS = {"ciudadanos", "casos", "interacciones", "auditorias"}
+TABLAS_ESPERADAS = {"ciudadanos", "casos", "interacciones", "auditorias", "usuarios"}
 
 
 def _alembic_config() -> Config:

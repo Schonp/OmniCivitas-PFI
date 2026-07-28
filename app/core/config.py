@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     jwt_refresh_token_expire_days: int = 7
 
     fernet_key: str = ""
+    hash_lookup_key: str = ""
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
