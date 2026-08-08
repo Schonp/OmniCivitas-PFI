@@ -12,6 +12,11 @@ async def obtener_ciudadano_por_id(db: AsyncSession, ciudadano_id: uuid.UUID) ->
     return await db.get(Ciudadano, ciudadano_id)
 
 
+async def obtener_ciudadano_por_documento(db: AsyncSession, documento: str) -> Ciudadano | None:
+    stmt = select(Ciudadano).where(Ciudadano.documento == documento)
+    return (await db.execute(stmt)).scalars().first()
+
+
 async def obtener_ciudadano_por_telefono(db: AsyncSession, telefono: str) -> Ciudadano | None:
     stmt = select(Ciudadano).where(Ciudadano.telefono_hash == hash_lookup_str(telefono))
     return (await db.execute(stmt)).scalars().first()

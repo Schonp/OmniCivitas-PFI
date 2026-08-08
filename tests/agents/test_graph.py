@@ -1,6 +1,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy import select
@@ -34,6 +35,15 @@ def _mock_llms(mocker, clasificacion: ClasificacionIntent, respuestas_ejecutor=N
             side_effect=respuestas_ejecutor
         )
     mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=mock_ejecutor)
+
+
+async def test_procesar_mensaje_sin_checkpointer_inicializado_falla(db_session, ciudadano):
+    """Sin checkpointer el orquestador corta con un error explícito: antes hacía
+    el setup dentro del request y se bloqueaba contra su propia transacción."""
+    with pytest.raises(RuntimeError, match="checkpointer"):
+        await procesar_mensaje(
+            db_session, mensaje="hola", canal=Canal.web, identificador="juan.perez@test.com"
+        )
 
 
 async def test_grafo_end_to_end_crea_reclamo(db_session, ciudadano, mocker):

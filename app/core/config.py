@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = ""
     jwt_access_token_expire_hours: int = 8
     jwt_refresh_token_expire_days: int = 7
+    chat_session_expire_hours: int = 4
 
     fernet_key: str = ""
     hash_lookup_key: str = ""

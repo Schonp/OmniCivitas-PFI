@@ -1,14 +1,20 @@
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.agents.graph import procesar_mensaje
 from app.core.config import settings
+from app.core.rate_limit import reset_rate_limit
 from app.core.security import crear_access_token, hash_password
 from app.db.models import Base, Ciudadano, RolUsuario, Usuario
 from app.db.session import get_db
 from app.main import app
+from app.schemas.agente import ClasificacionIntent
 
 
 @pytest.fixture
@@ -80,3 +86,56 @@ def token_admin(usuario_admin: Usuario) -> str:
 @pytest.fixture
 def auth_headers(token_admin: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token_admin}"}
+
+
+@pytest.fixture(autouse=True)
+def rate_limit_limpio():
+    # El contador vive en memoria del proceso: sin esto, los hits de un test
+    # se acumulan en el siguiente.
+    reset_rate_limit()
+    yield
+    reset_rate_limit()
+
+
+@pytest.fixture
+def mock_llms(mocker):
+    """Mockea los dos LLM del grafo. `clasificaciones` y `respuestas_ejecutor`
+    aceptan una lista para cubrir varios mensajes en el mismo test."""
+
+    def _configurar(
+        clasificaciones: ClasificacionIntent | list[ClasificacionIntent],
+        respuestas_ejecutor: list[AIMessage] | None = None,
+        resumen_escalado: str = "Resumen para operador",
+    ) -> None:
+        if isinstance(clasificaciones, ClasificacionIntent):
+            clasificaciones = [clasificaciones]
+
+        mock_intake = MagicMock()
+        mock_intake.with_structured_output.return_value.ainvoke = AsyncMock(
+            side_effect=list(clasificaciones)
+        )
+        # El nodo escalado usa el mismo LLM barato para el resumen del operador.
+        mock_intake.ainvoke = AsyncMock(return_value=AIMessage(content=resumen_escalado))
+        mocker.patch("app.agents.llm.get_llm_intake", return_value=mock_intake)
+
+        mock_ejecutor = MagicMock()
+        if respuestas_ejecutor is not None:
+            mock_ejecutor.bind_tools.return_value.ainvoke = AsyncMock(
+                side_effect=list(respuestas_ejecutor)
+            )
+        mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=mock_ejecutor)
+
+    return _configurar
+
+
+@pytest.fixture
+def checkpointer_en_memoria(mocker) -> InMemorySaver:
+    """El canal web llama al orquestador sin checkpointer (usa Postgres en runtime).
+    En tests se inyecta uno en memoria para no depender de ese setup."""
+    saver = InMemorySaver()
+
+    async def _procesar(db, **kwargs):
+        return await procesar_mensaje(db, **kwargs, checkpointer=saver)
+
+    mocker.patch("app.channels.web.procesar_mensaje", side_effect=_procesar)
+    return saver

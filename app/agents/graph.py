@@ -5,6 +5,8 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.contexto import nodo_contexto, obtener_ciudadano_por_canal
@@ -16,12 +18,47 @@ from app.core.config import settings
 from app.db.crud.auditoria import registrar_auditoria
 from app.db.crud.casos import obtener_caso_abierto_de_ciudadano
 from app.db.crud.interacciones import crear_interaccion
-from app.db.models import ActorInteraccion, Canal
+from app.db.models import ActorInteraccion, Canal, Caso
 from app.tools import ACTOR_AGENTE
 
 logger = logging.getLogger(__name__)
 
-_checkpointer_inicializado = False
+_pool: AsyncConnectionPool | None = None
+_checkpointer: AsyncPostgresSaver | None = None
+
+
+async def iniciar_checkpointer() -> None:
+    """Abre el pool y crea las tablas del checkpointer al arrancar la app.
+
+    No puede hacerse dentro de un request: `setup()` usa CREATE INDEX CONCURRENTLY,
+    que espera a que cierren todas las transacciones abiertas — incluida la del
+    propio request, que ya consultó el caso del ciudadano. Se bloquearía contra
+    sí mismo.
+    """
+    global _pool, _checkpointer
+    if _checkpointer is not None:
+        return
+
+    url = settings.database_url.replace("postgresql+asyncpg", "postgresql")
+    _pool = AsyncConnectionPool(
+        url,
+        min_size=1,
+        max_size=5,
+        open=False,
+        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+    )
+    await _pool.open(wait=True)
+    _checkpointer = AsyncPostgresSaver(_pool)
+    await _checkpointer.setup()
+    logger.info("checkpointer de LangGraph inicializado")
+
+
+async def cerrar_checkpointer() -> None:
+    global _pool, _checkpointer
+    _checkpointer = None
+    if _pool is not None:
+        await _pool.close()
+        _pool = None
 
 
 def decidir_ruta(state: AgentState) -> str:
@@ -108,6 +145,22 @@ async def _persistir_resultado(db: AsyncSession, final: AgentState) -> None:
 
     caso_uuid = uuid.UUID(caso_id)
     canal = Canal(final["canal"])
+
+    # El ciudadano puede retomar un caso desde otro canal: dejar registro del
+    # cambio es la evidencia auditable de la continuidad cross-canal.
+    caso = await db.get(Caso, caso_uuid)
+    if caso is not None and caso.canal_actual != canal:
+        canal_anterior = caso.canal_actual
+        caso.canal_actual = canal
+        await registrar_auditoria(
+            db,
+            caso_id=caso_uuid,
+            accion="cambio_canal",
+            actor=ACTOR_AGENTE,
+            actor_tipo=ActorInteraccion.agente_ia,
+            metadata={"canal_anterior": canal_anterior.value, "canal_nuevo": canal.value},
+        )
+
     await crear_interaccion(
         db,
         caso_id=caso_uuid,
@@ -148,23 +201,18 @@ async def procesar_mensaje(
 ) -> AgentState:
     """Entry point del orquestador: resuelve el thread, corre el grafo y
     persiste interacciones + auditoría de la respuesta."""
-    global _checkpointer_inicializado
+    saver = checkpointer if checkpointer is not None else _checkpointer
+    if saver is None:
+        raise RuntimeError(
+            "El checkpointer no está inicializado: falta llamar a iniciar_checkpointer()"
+        )
 
     thread_id = await _resolver_thread_id(db, canal, identificador)
     estado = _estado_inicial(mensaje, canal, identificador)
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
 
-    if checkpointer is not None:
-        grafo = construir_grafo(db, checkpointer)
-        final: AgentState = await grafo.ainvoke(estado, config=config)
-    else:
-        url = settings.database_url.replace("postgresql+asyncpg", "postgresql")
-        async with AsyncPostgresSaver.from_conn_string(url) as saver:
-            if not _checkpointer_inicializado:
-                await saver.setup()
-                _checkpointer_inicializado = True
-            grafo = construir_grafo(db, saver)
-            final = await grafo.ainvoke(estado, config=config)
+    grafo = construir_grafo(db, saver)
+    final: AgentState = await grafo.ainvoke(estado, config=config)
 
     await _persistir_resultado(db, final)
     logger.debug(
