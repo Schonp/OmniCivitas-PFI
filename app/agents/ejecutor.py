@@ -46,16 +46,19 @@ def construir_tools(db: AsyncSession, state: AgentState) -> list[BaseTool]:
         )
 
     @tool
-    async def crear_reserva(descripcion: str, fecha_solicitada: str) -> dict:
-        """Crea una reserva de turno para el ciudadano. Usar cuando el ciudadano pide
-        un turno o cita (ej. renovación de licencia, atención presencial).
-        fecha_solicitada en formato AAAA-MM-DD."""
+    async def crear_reserva(turno: str, fecha_hora: str) -> dict:
+        """Reserva un turno para el ciudadano en una de las agendas del organismo.
+        Usar cuando el ciudadano pide un turno o cita (ej. renovación de licencia,
+        atención presencial). `turno` es el nombre de la agenda (la lista de turnos
+        disponibles viene en la información del organismo) y `fecha_hora` va en
+        formato AAAA-MM-DD HH:MM. Si el ciudadano no dijo día y horario, preguntáselo
+        antes de reservar."""
         return await reservas.crear_reserva(
             db,
             ciudadano_id=ciudadano_id,
             canal=canal,
-            descripcion=descripcion,
-            fecha_solicitada=fecha_solicitada,
+            turno=turno,
+            fecha_hora=fecha_hora,
         )
 
     @tool

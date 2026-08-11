@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.dependencies import get_current_user
 from app.core.security import (
     crear_access_token,
     crear_refresh_token,
@@ -15,7 +16,7 @@ from app.db.crud.usuarios import (
     obtener_usuario_por_email,
     obtener_usuario_por_id,
 )
-from app.db.models import RolUsuario
+from app.db.models import RolUsuario, Usuario
 from app.db.session import get_db
 from app.schemas.auth import LoginRequest, RefreshRequest, Token
 from app.schemas.usuario import UsuarioCreate, UsuarioOut
@@ -65,6 +66,12 @@ async def refresh(datos: RefreshRequest, db: AsyncSession = Depends(get_db)) -> 
     )
 
 
+@router.get("/perfil", response_model=UsuarioOut)
+async def perfil(usuario_actual: Usuario = Depends(get_current_user)) -> UsuarioOut:
+    """El panel lo usa para mostrar quién está operando y validar el token guardado."""
+    return usuario_actual
+
+
 @router.post("/registrar", response_model=UsuarioOut, status_code=status.HTTP_201_CREATED)
 async def registrar_usuario(
     datos: UsuarioCreate,
@@ -78,7 +85,7 @@ async def registrar_usuario(
     menos un usuario, sólo un admin autenticado puede crear más.
     """
     if await contar_usuarios(db) == 0:
-        datos = datos.model_copy(update={"rol": RolUsuario.admin})
+        datos = datos.model_copy(update={"rol": RolUsuario.supervisor})
     else:
         if token is None:
             raise HTTPException(
@@ -92,9 +99,10 @@ async def registrar_usuario(
             ) from exc
 
         usuario_actual = await obtener_usuario_por_id(db, payload["sub"])
-        if usuario_actual is None or usuario_actual.rol != RolUsuario.admin:
+        if usuario_actual is None or usuario_actual.rol != RolUsuario.supervisor:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="Solo un admin puede crear usuarios"
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo un supervisor puede crear usuarios",
             )
 
     if await obtener_usuario_por_email(db, datos.email) is not None:

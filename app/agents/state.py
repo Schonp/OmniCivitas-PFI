@@ -3,7 +3,7 @@ from typing import Literal, Optional, TypedDict
 
 class AgentState(TypedDict):
     mensaje: str
-    canal: Literal["whatsapp", "sms", "email", "voz", "web"]
+    canal: Literal["whatsapp", "email", "voz", "web"]
     identificador: str
     ciudadano_id: Optional[str]
     caso_id: Optional[str]

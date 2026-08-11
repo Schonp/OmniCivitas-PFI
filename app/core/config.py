@@ -43,5 +43,12 @@ class Settings(BaseSettings):
 
     rate_limit_per_minute: int = 100
 
+    # Origen del panel de operador (Vite dev server). Coma-separado.
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [origen.strip() for origen in self.cors_origins.split(",") if origen.strip()]
+
 
 settings = Settings()

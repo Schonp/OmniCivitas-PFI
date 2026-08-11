@@ -53,5 +53,5 @@ async def test_contexto_identifica_por_email(db_session, ciudadano):
     assert resultado["ciudadano_id"] == str(ciudadano.id)
 
 
-async def test_buscar_conocimiento_stub_devuelve_vacio():
-    assert await buscar_conocimiento("reclamo", "la vereda está rota") == []
+async def test_buscar_conocimiento_sin_documentos_devuelve_vacio(db_session):
+    assert await buscar_conocimiento(db_session, "reclamo", "la vereda está rota") == []

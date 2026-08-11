@@ -79,6 +79,6 @@ async def obtener_conversacion(
     if caso is None:
         return None, []
     interacciones = await listar_interacciones_de_caso(
-        db, caso.id, limite=HISTORIAL_MAX_INTERACCIONES
+        db, caso.id, limite=HISTORIAL_MAX_INTERACCIONES, incluir_internas=False
     )
     return caso, interacciones

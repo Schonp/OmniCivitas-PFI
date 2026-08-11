@@ -42,8 +42,14 @@ class EstadoCaso(str, enum.Enum):
 
 
 class Canal(str, enum.Enum):
+    """Canales del prototipo: WhatsApp, email y llamada telefónica.
+
+    `web` es el simulador de canal que sostiene la demo hasta que Twilio e
+    IMAP/SMTP estén integrados; se elimina después de la entrega del 22/8,
+    junto con el valor `sms` que quedó huérfano en el tipo enum de Postgres.
+    """
+
     whatsapp = "whatsapp"
-    sms = "sms"
     email = "email"
     voz = "voz"
     web = "web"
@@ -56,9 +62,11 @@ class ActorInteraccion(str, enum.Enum):
 
 
 class RolUsuario(str, enum.Enum):
+    """Dos roles: el operador trabaja su propia bandeja, el supervisor ve todo
+    el organismo y distribuye los casos."""
+
     operador = "operador"
     supervisor = "supervisor"
-    admin = "admin"
 
 
 def _uuid() -> uuid.UUID:
@@ -120,6 +128,13 @@ class Caso(Base):
     operador_asignado_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("usuarios.id"), nullable=True
     )
+    motivo_cierre: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Resumen generado por IA para que el operador retome el caso sin leer toda
+    # la conversación. Se regenera a pedido desde el panel.
+    resumen_ia: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resumen_ia_generado_en: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -139,7 +154,15 @@ class Interaccion(Base):
     contenido: Mapped[str] = mapped_column(Text)
     canal: Mapped[Canal] = mapped_column(SAEnum(Canal, name="canal"))
     actor: Mapped[ActorInteraccion] = mapped_column(SAEnum(ActorInteraccion, name="actor_interaccion"))
-    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Nota interna: queda en el caso para el organismo, nunca se le muestra al
+    # ciudadano ni sale por ningún canal.
+    interna: Mapped[bool] = mapped_column(default=False, server_default="false")
+    # clock_timestamp() y no now(): now() es constante dentro de la transacción,
+    # y el mensaje del ciudadano y la respuesta del agente se guardan en la misma.
+    # Con la misma hora el panel mostraría la conversación en orden arbitrario.
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp()
+    )
 
     caso: Mapped["Caso"] = relationship(back_populates="interacciones")
 
@@ -152,7 +175,65 @@ class Auditoria(Base):
     accion: Mapped[str] = mapped_column(String(100))
     actor: Mapped[str] = mapped_column(String(200))
     actor_tipo: Mapped[ActorInteraccion] = mapped_column(SAEnum(ActorInteraccion, name="actor_interaccion"))
-    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp()
+    )
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
 
     caso: Mapped["Caso"] = relationship(back_populates="auditorias")
+
+
+class Turno(Base):
+    """Agenda de turnos que el organismo ofrece (ej. renovación de licencia).
+    El agente reserva sobre estas agendas; el panel las muestra para verificar
+    que las reservas del agente sean correctas."""
+
+    __tablename__ = "turnos"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    nombre: Mapped[str] = mapped_column(String(200), unique=True)
+    descripcion: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    reservas: Mapped[list["Reserva"]] = relationship(back_populates="turno")
+
+
+class Reserva(Base):
+    __tablename__ = "reservas"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    turno_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("turnos.id"), index=True)
+    caso_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("casos.id"), index=True)
+    ciudadano_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ciudadanos.id"), index=True)
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    turno: Mapped["Turno"] = relationship(back_populates="reservas")
+    ciudadano: Mapped["Ciudadano"] = relationship()
+    caso: Mapped["Caso"] = relationship()
+
+
+class DocumentoConocimiento(Base):
+    """Base de conocimiento del organismo: texto que se le da como contexto a la
+    IA para responder consultas (trámites, requisitos, horarios)."""
+
+    __tablename__ = "documentos_conocimiento"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    titulo: Mapped[str] = mapped_column(String(200))
+    contenido: Mapped[str] = mapped_column(Text)
+    # Nombre del archivo original si se cargó por archivo; None si fue texto directo.
+    nombre_archivo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class GrupoReclamo(Base):
+    """Agrupación de reclamos afines detectada por la IA. Se regenera completa en
+    cada corrida: es una foto para el panel, no una entidad de gestión."""
+
+    __tablename__ = "grupos_reclamos"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tema: Mapped[str] = mapped_column(String(200))
+    caso_ids: Mapped[list] = mapped_column(JSON)
+    generado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

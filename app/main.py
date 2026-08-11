@@ -3,9 +3,23 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.graph import cerrar_checkpointer, iniciar_checkpointer
-from app.api import agente, auth, casos, chat, ciudadanos, health
+from app.api import (
+    agente,
+    auth,
+    casos,
+    chat,
+    ciudadanos,
+    conocimiento,
+    health,
+    metricas,
+    reclamos,
+    turnos,
+    usuarios,
+)
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +38,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="OmniCivitas", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    # Sin esto el navegador no puede leer el total de la paginación.
+    expose_headers=["X-Total-Count"],
+)
+
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(ciudadanos.router)
 app.include_router(casos.router)
 app.include_router(agente.router)
 app.include_router(chat.router)
+app.include_router(metricas.router)
+app.include_router(usuarios.router)
+app.include_router(turnos.router)
+app.include_router(conocimiento.router)
+app.include_router(reclamos.router)

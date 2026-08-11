@@ -1,13 +1,15 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.db.models import ActorInteraccion
 
 
 class AuditoriaOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    # El modelo guarda el JSON en `metadata_` porque `metadata` está reservado
+    # en SQLAlchemy. Ese detalle interno no tiene por qué salir en la API.
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
     caso_id: uuid.UUID
@@ -15,4 +17,4 @@ class AuditoriaOut(BaseModel):
     actor: str
     actor_tipo: ActorInteraccion
     timestamp: datetime
-    metadata_: dict | None
+    metadata: dict | None = Field(default=None, validation_alias="metadata_")

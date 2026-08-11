@@ -1,4 +1,4 @@
-async def test_registrar_primer_usuario_es_admin_bootstrap(client):
+async def test_registrar_primer_usuario_es_supervisor_bootstrap(client):
     response = await client.post(
         "/api/auth/registrar",
         json={
@@ -10,7 +10,7 @@ async def test_registrar_primer_usuario_es_admin_bootstrap(client):
     )
 
     assert response.status_code == 201
-    assert response.json()["rol"] == "admin"
+    assert response.json()["rol"] == "supervisor"
 
 
 async def test_login_devuelve_tokens(client, usuario_admin):

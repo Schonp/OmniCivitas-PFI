@@ -66,11 +66,26 @@ async def ciudadano(db_session: AsyncSession) -> Ciudadano:
 
 @pytest.fixture
 async def usuario_admin(db_session: AsyncSession) -> Usuario:
+    """Supervisor: ve todos los casos del organismo y los distribuye."""
     usuario = Usuario(
         email="admin@omnicivitas.test",
         nombre="Admin de prueba",
         hashed_password=hash_password("password123"),
-        rol=RolUsuario.admin,
+        rol=RolUsuario.supervisor,
+    )
+    db_session.add(usuario)
+    await db_session.commit()
+    await db_session.refresh(usuario)
+    return usuario
+
+
+@pytest.fixture
+async def usuario_operador(db_session: AsyncSession) -> Usuario:
+    usuario = Usuario(
+        email="operador@omnicivitas.test",
+        nombre="Operador de prueba",
+        hashed_password=hash_password("password123"),
+        rol=RolUsuario.operador,
     )
     db_session.add(usuario)
     await db_session.commit()
@@ -86,6 +101,12 @@ def token_admin(usuario_admin: Usuario) -> str:
 @pytest.fixture
 def auth_headers(token_admin: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token_admin}"}
+
+
+@pytest.fixture
+def headers_operador(usuario_operador: Usuario) -> dict[str, str]:
+    token = crear_access_token(str(usuario_operador.id), usuario_operador.rol.value)
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(autouse=True)
