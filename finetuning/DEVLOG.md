@@ -413,12 +413,64 @@ el pool de tool calling total pasó de 139 a **333**, y el held-out de
 prueba de 28 a **67**. Dataset final: pool general 14.420, `train.jsonl`
 13.177, `validacion.jsonl` 1.509, `prueba_tool_calling.jsonl` 67.
 
+### Notebook de Colab (Unsloth + QLoRA)
+
+Se escribió `finetuning_qwen_colab.ipynb`, verificando contra los notebooks
+oficiales de Unsloth (`unslothai/notebooks` en GitHub, los de Qwen3 y Qwen2.5
+Coder) el patrón de API real antes de escribir código — `FastLanguageModel.
+from_pretrained`, `get_chat_template("qwen-2.5")`, `get_peft_model`,
+`SFTTrainer`/`SFTConfig`, `train_on_responses_only`, `save_pretrained_gguf` —
+en vez de confiar en lo que recordaba de memoria, porque la API de Unsloth
+cambia seguido entre versiones.
+
+El notebook clona este mismo repo de GitHub y corre `preparar_massive.py`,
+`preparar_multi3nlu.py`, `generar_ejemplos.py` y `armar_dataset.py` ahí
+adentro para regenerar el dataset, en vez de depender de subir archivos a
+mano a Colab — mismo dataset reproducible que en local.
+
+**Conversión del esquema a formato de chat**: cada fila de
+`EjemploEntrenamiento` (instrucción + intención + confianza + llamada\_
+herramienta + respuesta) se convierte a una conversación de 3 turnos
+(system/user/assistant), donde el turno del asistente es el JSON completo
+que el modelo tiene que aprender a producir. El prompt de sistema usado para
+entrenar es una versión resumida del `SYSTEM_EJECUTOR` real
+(`app/agents/ejecutor.py`) — documentado como simplificación a propósito:
+producción separa intake (clasifica) de ejecutor (tool calling + responde)
+en dos agentes y dos prompts distintos, y ninguno de los dos modela la
+identificación del ciudadano (`registrar_identidad`) ni la derivación a
+operador (`derivar_a_operador`) porque dependen de estado de conversación
+que este dataset de un solo turno no tiene. Ampliar el dataset para cubrir
+esos dos casos es trabajo a futuro, no algo que haga este notebook hoy.
+
+Hiperparámetros usados en la celda de LoRA y de entrenamiento: los mismos
+que ya estaban comprometidos en `chapter04.tex` antes de escribir una sola
+línea de este notebook (rank 16, alpha 32, dropout 0,05, sobre
+`q/k/v/o_proj` + `gate/up/down_proj`; LR 2e-4, scheduler coseno, 3 épocas,
+batch efectivo 16 con micro-batch 4 × acumulación 4) — no se inventó ningún
+valor nuevo acá, sólo se tradujo lo que ya estaba escrito a los argumentos
+reales de `SFTConfig`.
+
+La celda de evaluación mide exactamente los tres indicadores que compromete
+la tesis sobre `prueba_tool_calling.jsonl`: exactitud de intención,
+conteo de falsos positivos (confianza ≥ 0,6 con categoría incorrecta) y
+confiabilidad de tool calling (herramienta Y parámetros exactos). No se
+corrió todavía — necesita la GPU de Colab, no esta máquina.
+
 ### Qué queda para la próxima sesión
 
+- [ ] Correr el notebook en Colab y registrar los resultados reales de los
+      tres indicadores — hoy son metas, no mediciones (igual que aclara
+      `chapter04.tex`).
+- [ ] Ampliar el dataset para cubrir `registrar_identidad` y
+      `derivar_a_operador`, o decidir explícitamente dejarlos fuera del
+      fine-tuning y resolverlos por código en vez de por el modelo.
 - [ ] Rebalancear `generar_ejemplos.py`: sumar más fechas/plantillas de
       `crear_reserva` y más referencias/plantillas de
       `consultar_estado_caso` — reclamo ya tiene volumen de sobra, las
       otras dos tools todavía no.
+- [ ] Integración en `app/agents/llm.py` para apuntar a Ollama vía el
+      endpoint compatible con OpenAI, con el `.gguf` que exporta este
+      notebook (sin empezar).
 - [ ] Los datasets de audio (Common Voice Rioplatense, Google Argentinian
       Spanish) que menciona la tesis en esta misma sección no son parte de
       este dataset de texto — son para adaptar faster-whisper/Kokoro al
@@ -427,6 +479,5 @@ prueba de 28 a **67**. Dataset final: pool general 14.420, `train.jsonl`
       tesis tal como está escrita hoy, porque el texto actual de
       `chapter04.tex` los lista junto a MASSIVE y MULTI3NLU++ como si los
       cuatro alimentaran el mismo fine-tuning.
-- [ ] Notebook de Colab con Unsloth + QLoRA (sin empezar).
 - [ ] Integración en `app/agents/llm.py` para apuntar a Ollama vía endpoint
       compatible con OpenAI (sin empezar).
