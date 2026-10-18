@@ -42,10 +42,9 @@ async def buscar_conocimiento(
     db: AsyncSession, intencion: str | None, mensaje: str
 ) -> list[str]:
     """Contexto del organismo para el ejecutor: documentos de la base de
-    conocimiento que mencionan palabras del mensaje (recuperación léxica; la
-    semántica con pgvector queda para una fase posterior) y, si la intención es
-    reservar, las agendas de turnos disponibles para que la tool reciba un
-    nombre válido."""
+    conocimiento que mencionan palabras del mensaje (recuperación léxica, ver
+    buscar_documentos_relevantes) y, si la intención es reservar, las agendas
+    de turnos disponibles para que la tool reciba un nombre válido."""
     conocimiento = await buscar_documentos_relevantes(db, mensaje)
 
     if intencion == "reserva":

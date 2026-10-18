@@ -100,8 +100,13 @@ async def buscar_documentos_relevantes(db: AsyncSession, mensaje: str) -> list[s
     base crecía: como solo entran MAX_DOCUMENTOS_CONTEXTO, un documento nuevo que
     compartiera una palabra suelta desplazaba al que respondía la consulta.
 
-    La búsqueda semántica con pgvector queda para la fase de RAG; la interfaz
-    (mensaje → fragmentos) no cambia.
+    Decisión deliberada, no una versión provisoria: para el volumen de
+    documentos que carga un organismo (decenas, no miles) alcanza, evita
+    mantener embeddings actualizados en cada edición, y el puntaje se explica
+    por una cuenta de palabras en vez de una distancia vectorial opaca.
+    pgvector queda disponible en el stack para una búsqueda semántica si el
+    volumen de un organismo particular lo justificara, sin cambiar esta
+    interfaz (mensaje → fragmentos).
     """
     palabras = palabras_significativas(mensaje)
     if not palabras:
