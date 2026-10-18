@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -50,6 +50,16 @@ function valorAuditoria(valor: unknown): string {
   return String(valor);
 }
 
+// El correo entra por el polling de `scripts.revisar_correo` (cada 15 s), así
+// que refrescar más seguido que esto no adelanta nada: el techo de latencia lo
+// pone la lectura del buzón, no el panel.
+const REFRESCO_MS = 5_000;
+
+// Margen desde el fondo dentro del cual se considera que el operador está
+// mirando lo último. Si se fue más arriba a leer el historial, un mensaje nuevo
+// no le tironea la vista.
+const MARGEN_FONDO_PX = 80;
+
 const ESTILO_BURBUJA = {
   ciudadano: "bg-white ring-1 ring-slate-200 text-slate-800",
   agente_ia: "bg-institucional-600 text-white",
@@ -72,6 +82,12 @@ export function DetalleCaso() {
   const [equipo, setEquipo] = useState<Usuario[]>([]);
   const [generandoResumen, setGenerandoResumen] = useState(false);
 
+  const conversacionRef = useRef<HTMLDivElement>(null);
+  const pegadoAlFondo = useRef(true);
+  // En un ref y no en el estado: el temporizador se arma una sola vez y tiene
+  // que leer el valor de ahora, no el del render en el que se creó.
+  const guardandoRef = useRef(false);
+
   const esSupervisor = usuario?.rol === "supervisor";
 
   useEffect(() => {
@@ -83,27 +99,68 @@ export function DetalleCaso() {
       .catch(() => setEquipo([]));
   }, [esSupervisor]);
 
-  const cargar = useCallback(async () => {
-    try {
-      const [detalle, mensajes, registros] = await Promise.all([
-        obtenerCaso(casoId),
-        listarInteracciones(casoId),
-        listarAuditoria(casoId),
-      ]);
-      setCaso(detalle);
-      setInteracciones(mensajes);
-      setAuditoria(registros);
-      setError(null);
-    } catch (excepcion) {
-      setError(excepcion instanceof Error ? excepcion.message : "No se pudo cargar el caso");
-    }
-  }, [casoId]);
+  const cargar = useCallback(
+    async (silencioso = false) => {
+      try {
+        const [detalle, mensajes, registros] = await Promise.all([
+          obtenerCaso(casoId),
+          listarInteracciones(casoId),
+          listarAuditoria(casoId),
+        ]);
+        setCaso(detalle);
+        setInteracciones(mensajes);
+        setAuditoria(registros);
+        setError(null);
+      } catch (excepcion) {
+        // Que se caiga un refresco automático no es motivo para taparle al
+        // operador la conversación que está leyendo: se reintenta en el
+        // próximo ciclo.
+        if (silencioso) {
+          return;
+        }
+        setError(excepcion instanceof Error ? excepcion.message : "No se pudo cargar el caso");
+      }
+    },
+    [casoId],
+  );
 
   useEffect(() => {
     void cargar();
   }, [cargar]);
 
+  useEffect(() => {
+    // Lo que el ciudadano acaba de escribir aparece solo: el operador no tiene
+    // que recargar la página para enterarse. Se saltea el ciclo con la pestaña
+    // en segundo plano y mientras se está enviando una respuesta, para no
+    // cruzarse con la recarga que hace el propio envío.
+    const temporizador = setInterval(() => {
+      if (document.visibilityState !== "visible" || guardandoRef.current) {
+        return;
+      }
+      void cargar(true);
+    }, REFRESCO_MS);
+    return () => clearInterval(temporizador);
+  }, [cargar]);
+
+  useEffect(() => {
+    const caja = conversacionRef.current;
+    if (caja === null || !pegadoAlFondo.current) {
+      return;
+    }
+    caja.scrollTop = caja.scrollHeight;
+  }, [interacciones]);
+
+  function recordarPosicionDeLectura() {
+    const caja = conversacionRef.current;
+    if (caja === null) {
+      return;
+    }
+    pegadoAlFondo.current =
+      caja.scrollHeight - caja.scrollTop - caja.clientHeight < MARGEN_FONDO_PX;
+  }
+
   async function ejecutar(accion: () => Promise<unknown>) {
+    guardandoRef.current = true;
     setGuardando(true);
     try {
       await accion();
@@ -111,6 +168,7 @@ export function DetalleCaso() {
     } catch (excepcion) {
       setError(excepcion instanceof Error ? excepcion.message : "No se pudo completar la acción");
     } finally {
+      guardandoRef.current = false;
       setGuardando(false);
     }
   }
@@ -335,7 +393,20 @@ export function DetalleCaso() {
         />
 
         <PanelPestana id="conversacion" activa={pestana}>
-          <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-5">
+          <p className="mb-2 flex items-center justify-end gap-1.5 text-xs text-slate-500">
+            <span className="relative flex h-2 w-2" aria-hidden>
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-institucional-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-institucional-500" />
+            </span>
+            En vivo: los mensajes nuevos aparecen solos
+          </p>
+
+          <div
+            ref={conversacionRef}
+            onScroll={recordarPosicionDeLectura}
+            aria-live="polite"
+            className="max-h-[60vh] space-y-4 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-5"
+          >
             {interacciones.map((interaccion) => (
               <div
                 key={interaccion.id}

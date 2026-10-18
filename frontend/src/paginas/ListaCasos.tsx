@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, Download, Inbox, Search, UserRound } from "lucide-react";
+import { AlertCircle, Archive, Download, Inbox, Search, UserRound } from "lucide-react";
 
 import { useAuth } from "../auth";
 import { EstadoBadge, RecorridoCanal, TipoBadge } from "../componentes/Etiquetas";
 import { Espera } from "../componentes/Espera";
+import { Pestanas } from "../componentes/Pestanas";
 import { contarCasos, exportarCasos, listarCasos } from "../lib/casos";
 import { formatearFechaHora, idCorto } from "../lib/formato";
-import { ESTADOS, ETIQUETA_ESTADO, type Caso, type EstadoCaso } from "../lib/tipos";
+import { ESTADOS_ACTIVOS, ETIQUETA_ESTADO, type Caso, type EstadoCaso } from "../lib/tipos";
 
 type Filtro = EstadoCaso | "todos";
+type Solapa = "casos" | "archivados";
 
 const POR_PAGINA = 20;
 const REFRESCO_MS = 20_000;
@@ -22,6 +24,7 @@ export function ListaCasos() {
   const [casos, setCasos] = useState<Caso[]>([]);
   const [total, setTotal] = useState(0);
   const [conteos, setConteos] = useState<Record<string, number>>({});
+  const [solapa, setSolapa] = useState<Solapa>("casos");
   const [filtro, setFiltro] = useState<Filtro>("todos");
   const [sinAsignar, setSinAsignar] = useState(false);
   const [busqueda, setBusqueda] = useState("");
@@ -44,9 +47,10 @@ export function ListaCasos() {
     try {
       const [pagina_, conteo] = await Promise.all([
         listarCasos({
-          estado: filtro === "todos" ? undefined : filtro,
+          estado: solapa === "casos" && filtro !== "todos" ? filtro : undefined,
+          archivados: solapa === "archivados",
           q: busqueda.trim() || undefined,
-          sinAsignar: sinAsignar && esSupervisor,
+          sinAsignar: solapa === "casos" && sinAsignar && esSupervisor,
           limite: POR_PAGINA,
           desplazamiento: pagina * POR_PAGINA,
         }),
@@ -65,7 +69,7 @@ export function ListaCasos() {
       setCargando(false);
       setRefrescando(false);
     }
-  }, [filtro, busqueda, sinAsignar, pagina, esSupervisor]);
+  }, [solapa, filtro, busqueda, sinAsignar, pagina, esSupervisor]);
 
   useEffect(() => {
     void cargar();
@@ -82,6 +86,13 @@ export function ListaCasos() {
     setPagina(0);
   }
 
+  function cambiarSolapa(nueva: Solapa) {
+    setSolapa(nueva);
+    setFiltro("todos");
+    setSinAsignar(false);
+    setPagina(0);
+  }
+
   const ultimaPagina = Math.max(Math.ceil(total / POR_PAGINA) - 1, 0);
 
   return (
@@ -90,10 +101,11 @@ export function ListaCasos() {
         <div>
           <h2 className="text-xl font-semibold text-slate-900">
             {esSupervisor ? "Casos del organismo" : "Mi bandeja"}
+            {solapa === "archivados" && " · Archivados"}
           </h2>
           <p className="text-sm text-slate-600">
             {cargando ? "Cargando casos…" : `${total} caso(s)`}
-            {!esSupervisor && " asignados a usted"}
+            {!esSupervisor && solapa === "casos" && " asignados a usted"}
           </p>
         </div>
 
@@ -130,50 +142,64 @@ export function ListaCasos() {
         </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        {(["todos", ...ESTADOS] as Filtro[]).map((opcion) => (
-          <button
-            key={opcion}
-            type="button"
-            onClick={() => cambiarFiltro(opcion)}
-            aria-pressed={filtro === opcion}
-            className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition ${
-              filtro === opcion
-                ? "bg-institucional-600 text-white"
-                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-            }`}
-          >
-            {opcion === "todos" ? "Todos" : ETIQUETA_ESTADO[opcion]}
-            {conteos[opcion] !== undefined && (
-              <span
-                className={`rounded-full px-1.5 text-xs tabular-nums ${
-                  filtro === opcion ? "bg-institucional-700" : "bg-slate-100 text-slate-600"
-                }`}
-              >
-                {conteos[opcion]}
-              </span>
-            )}
-          </button>
-        ))}
-
-        {esSupervisor && (
-          <button
-            type="button"
-            onClick={() => {
-              setSinAsignar((valor) => !valor);
-              setPagina(0);
-            }}
-            aria-pressed={sinAsignar}
-            className={`ml-2 inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition ${
-              sinAsignar
-                ? "bg-amber-500 text-white"
-                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
-            }`}
-          >
-            Sin asignar
-          </button>
-        )}
+      <div className="mb-4">
+        <Pestanas
+          pestanas={[
+            { id: "casos", etiqueta: "Casos", contador: conteos.todos },
+            { id: "archivados", etiqueta: "Archivados", contador: conteos.cerrado ?? 0 },
+          ]}
+          activa={solapa}
+          onCambiar={(id) => cambiarSolapa(id as Solapa)}
+          etiquetaAria="Bandeja activa o archivo de casos cerrados"
+        />
       </div>
+
+      {solapa === "casos" && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {(["todos", ...ESTADOS_ACTIVOS] as Filtro[]).map((opcion) => (
+            <button
+              key={opcion}
+              type="button"
+              onClick={() => cambiarFiltro(opcion)}
+              aria-pressed={filtro === opcion}
+              className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition ${
+                filtro === opcion
+                  ? "bg-institucional-600 text-white"
+                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {opcion === "todos" ? "Todos" : ETIQUETA_ESTADO[opcion]}
+              {conteos[opcion] !== undefined && (
+                <span
+                  className={`rounded-full px-1.5 text-xs tabular-nums ${
+                    filtro === opcion ? "bg-institucional-700" : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  {conteos[opcion]}
+                </span>
+              )}
+            </button>
+          ))}
+
+          {esSupervisor && (
+            <button
+              type="button"
+              onClick={() => {
+                setSinAsignar((valor) => !valor);
+                setPagina(0);
+              }}
+              aria-pressed={sinAsignar}
+              className={`ml-2 inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition ${
+                sinAsignar
+                  ? "bg-amber-500 text-white"
+                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              Sin asignar
+            </button>
+          )}
+        </div>
+      )}
 
       {error && (
         <p className="mb-4 flex items-center gap-2 rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-800">
@@ -258,12 +284,21 @@ export function ListaCasos() {
             {!cargando && casos.length === 0 && (
               <tr>
                 <td colSpan={esSupervisor ? 8 : 7} className="px-4 py-12 text-center">
-                  <Inbox size={28} className="mx-auto mb-2 text-slate-300" aria-hidden />
-                  <p className="text-slate-600">
-                    {esSupervisor
-                      ? "Ningún caso coincide con el filtro o la búsqueda."
-                      : "No tiene casos asignados. Un supervisor se los va a asignar."}
-                  </p>
+                  {solapa === "archivados" ? (
+                    <>
+                      <Archive size={28} className="mx-auto mb-2 text-slate-300" aria-hidden />
+                      <p className="text-slate-600">Todavía no hay casos cerrados que archivar.</p>
+                    </>
+                  ) : (
+                    <>
+                      <Inbox size={28} className="mx-auto mb-2 text-slate-300" aria-hidden />
+                      <p className="text-slate-600">
+                        {esSupervisor
+                          ? "Ningún caso coincide con el filtro o la búsqueda."
+                          : "No tiene casos asignados. Un supervisor se los va a asignar."}
+                      </p>
+                    </>
+                  )}
                 </td>
               </tr>
             )}

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.graph import procesar_mensaje
 from app.agents.state import AgentState
-from app.db.crud.casos import obtener_caso_abierto_de_ciudadano
+from app.db.crud.casos import obtener_caso_activo_de_ciudadano
 from app.db.crud.ciudadanos import crear_ciudadano, obtener_ciudadano_por_documento
 from app.db.crud.interacciones import listar_interacciones_de_caso
 from app.db.models import Canal, Caso, Ciudadano, Interaccion
@@ -74,8 +74,8 @@ async def recibir_mensaje(
 async def obtener_conversacion(
     db: AsyncSession, ciudadano: Ciudadano
 ) -> tuple[Caso | None, list[Interaccion]]:
-    """Caso abierto del ciudadano con sus interacciones de todos los canales."""
-    caso = await obtener_caso_abierto_de_ciudadano(db, ciudadano.id)
+    """Caso activo del ciudadano con sus interacciones de todos los canales."""
+    caso = await obtener_caso_activo_de_ciudadano(db, ciudadano.id)
     if caso is None:
         return None, []
     interacciones = await listar_interacciones_de_caso(

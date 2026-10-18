@@ -28,6 +28,9 @@ export interface FiltrosCasos {
   estado?: EstadoCaso;
   q?: string;
   sinAsignar?: boolean;
+  // Solapa "Archivados": solo cerrados. Sin esto, la bandeja activa los
+  // excluye siempre, aunque el filtro de estado sea "todos".
+  archivados?: boolean;
   limite?: number;
   desplazamiento?: number;
 }
@@ -39,6 +42,7 @@ export async function listarCasos(
   if (filtros.estado) query.set("estado", filtros.estado);
   if (filtros.q) query.set("q", filtros.q);
   if (filtros.sinAsignar) query.set("sin_asignar", "true");
+  if (filtros.archivados) query.set("archivados", "true");
   query.set("limite", String(filtros.limite ?? 20));
   query.set("desplazamiento", String(filtros.desplazamiento ?? 0));
 

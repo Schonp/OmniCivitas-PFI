@@ -106,7 +106,7 @@ async def test_enviar_mensaje_resuelve_caso_y_audita(
 
     assert response.status_code == 200
     cuerpo = response.json()
-    assert cuerpo["respuesta"] == "Su reclamo fue registrado."
+    assert cuerpo["respuesta"].endswith("Su reclamo fue registrado.")
     assert cuerpo["escalado"] is False
 
     caso = await db_session.get(Caso, uuid.UUID(cuerpo["caso_id"]))

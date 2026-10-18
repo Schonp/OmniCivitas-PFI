@@ -42,3 +42,66 @@ async def test_crear_reclamo_ciudadano_inexistente(db_session):
             descripcion="La vereda está rota",
             categoria="infraestructura",
         )
+
+
+async def test_crear_reclamo_completa_el_caso_ya_abierto_en_vez_de_abrir_otro(
+    db_session, ciudadano
+):
+    """El bug real: `_abrir_caso` abre un caso cuando el ciudadano recién arranca
+    y todavía falta un dato para poder ejecutar (ej. la dirección). Cuando por
+    fin lo da, la tool creaba OTRO caso en vez de completar el que ya estaba
+    abierto: el mensaje con el dato final quedaba huérfano, desconectado del
+    resto de la conversación."""
+    ya_abierto = Caso(
+        ciudadano_id=ciudadano.id,
+        tipo=TipoCaso.reclamo,
+        canal_origen=Canal.whatsapp,
+        canal_actual=Canal.whatsapp,
+    )
+    db_session.add(ya_abierto)
+    await db_session.commit()
+
+    resultado = await crear_reclamo(
+        db_session,
+        ciudadano_id=ciudadano.id,
+        canal=Canal.whatsapp,
+        descripcion="La vereda está rota en Anchorena 2459",
+        categoria="infraestructura",
+        caso_id=ya_abierto.id,
+    )
+
+    assert resultado["caso_id"] == str(ya_abierto.id)
+
+    casos = (
+        (await db_session.execute(select(Caso).where(Caso.ciudadano_id == ciudadano.id)))
+        .scalars()
+        .all()
+    )
+    assert len(casos) == 1, "no se abrió un segundo caso"
+
+
+async def test_crear_reclamo_no_reusa_un_caso_de_otro_tipo(db_session, ciudadano):
+    """El caso activo puede ser de otro tipo (ej. una consulta en curso): ahí sí
+    corresponde abrir uno nuevo, no pisarle el tipo al que ya existía."""
+    consulta = Caso(
+        ciudadano_id=ciudadano.id,
+        tipo=TipoCaso.consulta,
+        canal_origen=Canal.whatsapp,
+        canal_actual=Canal.whatsapp,
+    )
+    db_session.add(consulta)
+    await db_session.commit()
+
+    resultado = await crear_reclamo(
+        db_session,
+        ciudadano_id=ciudadano.id,
+        canal=Canal.whatsapp,
+        descripcion="La vereda está rota",
+        categoria="infraestructura",
+        caso_id=consulta.id,
+    )
+
+    assert resultado["caso_id"] != str(consulta.id)
+
+    caso_nuevo = await db_session.get(Caso, uuid.UUID(resultado["caso_id"]))
+    assert caso_nuevo.tipo == TipoCaso.reclamo

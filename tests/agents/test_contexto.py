@@ -1,6 +1,6 @@
 from app.agents.contexto import buscar_conocimiento, nodo_contexto
 from app.db.crud.interacciones import crear_interaccion
-from app.db.models import ActorInteraccion, Canal, Caso, TipoCaso
+from app.db.models import ActorInteraccion, Canal, Caso, EstadoCaso, TipoCaso
 
 
 def _estado(identificador: str, canal: str = "whatsapp") -> dict:
@@ -55,3 +55,23 @@ async def test_contexto_identifica_por_email(db_session, ciudadano):
 
 async def test_buscar_conocimiento_sin_documentos_devuelve_vacio(db_session):
     assert await buscar_conocimiento(db_session, "reclamo", "la vereda está rota") == []
+
+
+async def test_contexto_recupera_el_caso_derivado_a_un_operador(db_session, ciudadano):
+    """Derivado no es cerrado: el ciudadano que sigue escribiendo tiene que caer
+    en el mismo caso, no en uno nuevo."""
+    caso = Caso(
+        ciudadano_id=ciudadano.id,
+        tipo=TipoCaso.tramite,
+        estado=EstadoCaso.escalado,
+        canal_origen=Canal.email,
+        canal_actual=Canal.email,
+    )
+    db_session.add(caso)
+    await db_session.commit()
+
+    resultado = await nodo_contexto(
+        _estado("juan.perez@test.com", canal="email"), db_session
+    )
+
+    assert resultado["caso_id"] == str(caso.id)

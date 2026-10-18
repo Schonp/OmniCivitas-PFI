@@ -46,19 +46,46 @@ async def obtener_casos_por_ids(db: AsyncSession, ids: list[uuid.UUID]) -> list[
     return list((await db.execute(consulta)).scalars().all())
 
 
-async def obtener_caso_abierto_de_ciudadano(
+async def obtener_caso_activo_de_ciudadano(
     db: AsyncSession, ciudadano_id: uuid.UUID
 ) -> Caso | None:
+    """El caso vigente del ciudadano: el último que todavía no se cerró.
+
+    Activo es todo lo que no está `cerrado`, `escalado` incluido. La consulta
+    listaba solo `abierto` y `en_progreso`, y `escalado` significa "derivado,
+    esperando que alguien lo tome": el caso sigue vivo. Con ese filtro, cuando
+    el ciudadano contestaba después de una derivación no se encontraba su caso
+    y el mensaje abría uno nuevo, con la conversación partida en dos y el
+    operador respondiendo sobre un hilo que el ciudadano ya no estaba usando.
+    """
     consulta = (
         select(Caso)
         .where(
             Caso.ciudadano_id == ciudadano_id,
-            Caso.estado.in_([EstadoCaso.abierto, EstadoCaso.en_progreso]),
+            Caso.estado != EstadoCaso.cerrado,
         )
         .order_by(Caso.updated_at.desc())
         .limit(1)
     )
     return (await db.execute(consulta)).scalars().first()
+
+
+async def listar_casos_activos_de_ciudadano(
+    db: AsyncSession, ciudadano_id: uuid.UUID, *, limite: int = 5
+) -> list[Caso]:
+    """Los casos que el ciudadano todavía tiene en curso, del más reciente al
+    más viejo. El saludo se los enumera para que pueda retomar uno en vez de
+    arrancar otro pedido por lo mismo."""
+    consulta = (
+        select(Caso)
+        .where(
+            Caso.ciudadano_id == ciudadano_id,
+            Caso.estado != EstadoCaso.cerrado,
+        )
+        .order_by(Caso.updated_at.desc())
+        .limit(limite)
+    )
+    return list((await db.execute(consulta)).scalars().all())
 
 
 def _filtrar_casos(
@@ -68,9 +95,12 @@ def _filtrar_casos(
     busqueda: str | None,
     operador_id: uuid.UUID | None,
     solo_sin_asignar: bool,
+    excluir_estado: EstadoCaso | None = None,
 ):
     if estado is not None:
         consulta = consulta.where(Caso.estado == estado)
+    if excluir_estado is not None:
+        consulta = consulta.where(Caso.estado != excluir_estado)
     if operador_id is not None:
         consulta = consulta.where(Caso.operador_asignado_id == operador_id)
     if solo_sin_asignar:
@@ -90,6 +120,7 @@ async def contar_casos(
     busqueda: str | None = None,
     operador_id: uuid.UUID | None = None,
     solo_sin_asignar: bool = False,
+    excluir_estado: EstadoCaso | None = None,
 ) -> int:
     consulta = _filtrar_casos(
         select(func.count(Caso.id)),
@@ -97,6 +128,7 @@ async def contar_casos(
         busqueda=busqueda,
         operador_id=operador_id,
         solo_sin_asignar=solo_sin_asignar,
+        excluir_estado=excluir_estado,
     )
     return (await db.execute(consulta)).scalar_one()
 
@@ -120,6 +152,7 @@ async def listar_casos(
     busqueda: str | None = None,
     operador_id: uuid.UUID | None = None,
     solo_sin_asignar: bool = False,
+    excluir_estado: EstadoCaso | None = None,
     limite: int = 50,
     desplazamiento: int = 0,
 ) -> list[Caso]:
@@ -129,6 +162,7 @@ async def listar_casos(
         busqueda=busqueda,
         operador_id=operador_id,
         solo_sin_asignar=solo_sin_asignar,
+        excluir_estado=excluir_estado,
     )
     consulta = consulta.order_by(Caso.updated_at.desc()).limit(limite).offset(desplazamiento)
     resultado = await db.execute(consulta)
@@ -141,7 +175,13 @@ async def esperas_de_casos(
     """Desde cuándo espera respuesta cada caso.
 
     Es el último mensaje del ciudadano que todavía no tiene una respuesta
-    posterior del agente o del operador. Si ya le respondieron, no espera nada.
+    posterior. Si ya le respondieron, no espera nada.
+
+    Qué cuenta como respuesta depende de en manos de quién está el caso: en uno
+    derivado o tomado por un operador, lo que se espera es la respuesta de esa
+    persona, así que el acuse de recibo del agente no lo saca de la cola. De lo
+    contrario el aviso de derivación bastaba para que el caso figurara atendido
+    y desapareciera de la bandeja sin que nadie lo hubiera mirado.
     """
     if not casos:
         return {}
@@ -155,16 +195,23 @@ async def esperas_de_casos(
 
     ultimo_ciudadano: dict[uuid.UUID, datetime] = {}
     ultima_respuesta: dict[uuid.UUID, datetime] = {}
+    ultima_del_operador: dict[uuid.UUID, datetime] = {}
     for caso_id, actor, momento in filas:
         if actor == ActorInteraccion.ciudadano:
             ultimo_ciudadano[caso_id] = momento
         else:
             ultima_respuesta[caso_id] = momento
+            if actor == ActorInteraccion.operador:
+                ultima_del_operador[caso_id] = momento
 
     esperas: dict[uuid.UUID, datetime | None] = {}
     for caso in casos:
         consulta = ultimo_ciudadano.get(caso.id)
-        respuesta = ultima_respuesta.get(caso.id)
+        respuesta = (
+            ultima_del_operador.get(caso.id)
+            if caso.en_manos_humanas
+            else ultima_respuesta.get(caso.id)
+        )
         sin_responder = consulta is not None and (respuesta is None or respuesta < consulta)
         esperas[caso.id] = consulta if sin_responder else None
     return esperas
@@ -226,21 +273,44 @@ async def cambiar_estado_caso(
 
 
 async def asignar_caso(
-    db: AsyncSession, caso: Caso, operador: Usuario | None, *, actor: str
+    db: AsyncSession,
+    caso: Caso,
+    operador: Usuario | None,
+    *,
+    actor: str,
+    actor_tipo: ActorInteraccion = ActorInteraccion.operador,
 ) -> Caso:
-    """Asigna el caso a un operador, o lo libera si `operador` es None."""
+    """Asigna el caso a un operador, o lo libera si `operador` es None.
+
+    Tomar un caso lo pone en progreso, y liberarlo lo devuelve a abierto. Antes
+    ningún camino del código asignaba `en_progreso`: quedaba a criterio del
+    operador ponerlo a mano, así que el estado no reflejaba la realidad. El paso
+    por `escalado` no se pierde, queda en la auditoría.
+
+    `actor_tipo` por defecto es `operador` (el panel: alguien tomó o reasignó el
+    caso a mano). El escalado automático pasa `agente_ia`, para que la auditoría
+    diga quién asignó de verdad y no le atribuya la acción a una persona.
+    """
     anterior = caso.operador_asignado
+    estado_anterior = caso.estado
     caso.operador_asignado_id = operador.id if operador is not None else None
+
+    if caso.estado != EstadoCaso.cerrado:
+        caso.estado = (
+            EstadoCaso.en_progreso if operador is not None else EstadoCaso.abierto
+        )
 
     await registrar_auditoria(
         db,
         caso_id=caso.id,
         accion="asignacion",
         actor=actor,
-        actor_tipo=ActorInteraccion.operador,
+        actor_tipo=actor_tipo,
         metadata={
             "operador_anterior": anterior.nombre if anterior is not None else None,
             "operador_nuevo": operador.nombre if operador is not None else None,
+            "estado_anterior": estado_anterior.value,
+            "estado_nuevo": caso.estado.value,
         },
     )
 

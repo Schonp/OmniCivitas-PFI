@@ -24,6 +24,7 @@ async def crear_reserva(
     canal: Canal,
     turno: str,
     fecha_hora: str,
+    caso_id: uuid.UUID | None = None,
 ) -> dict:
     if await obtener_ciudadano_por_id(db, ciudadano_id) is None:
         raise ToolException("Ciudadano no encontrado")
@@ -42,14 +43,21 @@ async def crear_reserva(
             "fecha_hora inválida: usar el formato AAAA-MM-DD HH:MM"
         ) from error
 
-    caso = Caso(
-        ciudadano_id=ciudadano_id,
-        tipo=TipoCaso.reserva,
-        canal_origen=canal,
-        canal_actual=canal,
-    )
-    db.add(caso)
-    await db.flush()
+    # Igual que en `crear_reclamo`: si la conversación ya tenía un caso abierto
+    # para esta reserva (se abrió al pedir el turno, antes de tener día y
+    # horario), se completa ese caso en vez de abrir uno nuevo con el mensaje
+    # que trae el dato que faltaba.
+    caso = await db.get(Caso, caso_id) if caso_id is not None else None
+    si_reusa = caso is not None and caso.tipo == TipoCaso.reserva
+    if not si_reusa:
+        caso = Caso(
+            ciudadano_id=ciudadano_id,
+            tipo=TipoCaso.reserva,
+            canal_origen=canal,
+            canal_actual=canal,
+        )
+        db.add(caso)
+        await db.flush()
 
     reserva = await crear_reserva_de_turno(
         db,
@@ -71,6 +79,7 @@ async def crear_reserva(
     await db.refresh(caso)
 
     return {
+        "referencia": caso.referencia,
         "caso_id": str(caso.id),
         "reserva_id": str(reserva.id),
         "turno": agenda.nombre,

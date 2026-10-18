@@ -151,12 +151,13 @@ def mock_llms(mocker):
 
 @pytest.fixture
 def checkpointer_en_memoria(mocker) -> InMemorySaver:
-    """El canal web llama al orquestador sin checkpointer (usa Postgres en runtime).
+    """Los canales llaman al orquestador sin checkpointer (usa Postgres en runtime).
     En tests se inyecta uno en memoria para no depender de ese setup."""
     saver = InMemorySaver()
 
     async def _procesar(db, **kwargs):
         return await procesar_mensaje(db, **kwargs, checkpointer=saver)
 
-    mocker.patch("app.channels.web.procesar_mensaje", side_effect=_procesar)
+    for canal in ("web", "whatsapp", "email"):
+        mocker.patch(f"app.channels.{canal}.procesar_mensaje", side_effect=_procesar)
     return saver

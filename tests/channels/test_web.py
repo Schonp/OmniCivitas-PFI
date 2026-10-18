@@ -83,7 +83,7 @@ async def test_recibir_mensaje_crea_caso_y_persiste_interacciones(
         db_session, ciudadano=ciudadano, mensaje="Hace una semana que no pasa el camión"
     )
 
-    assert final["respuesta"] == "Registré su reclamo. Le avisaremos por este medio."
+    assert final["respuesta"].endswith("Registré su reclamo. Le avisaremos por este medio.")
     caso = await db_session.get(Caso, uuid.UUID(final["caso_id"]))
     assert caso.tipo == TipoCaso.reclamo
     assert caso.canal_origen == Canal.web

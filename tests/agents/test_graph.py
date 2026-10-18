@@ -6,8 +6,9 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy import select
 
-from app.agents.escalado import RESPUESTA_ESCALADO
+from app.agents.escalado import CIERRE_ESCALADO, MOTIVO_EN_CRIOLLO
 from app.agents.graph import procesar_mensaje
+from app.agents.opciones import RESPUESTA_OPCIONES
 from app.db.models import (
     ActorInteraccion,
     Auditoria,
@@ -20,10 +21,13 @@ from app.db.models import (
 from app.schemas.agente import ClasificacionIntent
 
 
-def _mock_llms(mocker, clasificacion: ClasificacionIntent, respuestas_ejecutor=None):
+def _mock_llms(mocker, clasificacion, respuestas_ejecutor=None):
+    """`clasificacion` acepta una lista para cubrir varios mensajes seguidos."""
+    if isinstance(clasificacion, ClasificacionIntent):
+        clasificacion = [clasificacion]
     mock_intake = MagicMock()
     mock_intake.with_structured_output.return_value.ainvoke = AsyncMock(
-        return_value=clasificacion
+        side_effect=list(clasificacion)
     )
     # El nodo escalado usa el mismo LLM barato para el resumen del operador.
     mock_intake.ainvoke = AsyncMock(return_value=AIMessage(content="Resumen para operador"))
@@ -79,7 +83,9 @@ async def test_grafo_end_to_end_crea_reclamo(db_session, ciudadano, mocker):
         checkpointer=InMemorySaver(),
     )
 
-    assert final["respuesta"] == "Su reclamo fue registrado. Le informaremos las novedades."
+    assert final["respuesta"].endswith(
+        "Su reclamo fue registrado. Le informaremos las novedades."
+    )
     assert final["requiere_escalado"] is False
 
     caso = await db_session.get(Caso, uuid.UUID(final["caso_id"]))
@@ -105,24 +111,42 @@ async def test_grafo_end_to_end_crea_reclamo(db_session, ciudadano, mocker):
     assert "respuesta_ia" in acciones
 
 
-async def test_grafo_escala_con_confianza_baja(db_session, ciudadano, mocker):
+async def test_grafo_escala_cuando_se_agotan_las_repreguntas(db_session, ciudadano, mocker):
+    """Un mensaje que no se entiende ya no deriva de una: primero se pregunta.
+    Recién agotadas las vueltas interviene una persona."""
     _mock_llms(
         mocker,
-        ClasificacionIntent(intencion="otro", entidades={}, confianza=0.3),
+        [ClasificacionIntent(intencion="otro", entidades={}, confianza=0.3)] * 3,
     )
+    saver = InMemorySaver()
 
-    final = await procesar_mensaje(
-        db_session,
-        mensaje="ehh no sé, es un tema medio raro",
-        canal=Canal.whatsapp,
-        identificador="+5491122334455",
-        checkpointer=InMemorySaver(),
-    )
+    async def _mandar(texto: str):
+        return await procesar_mensaje(
+            db_session,
+            mensaje=texto,
+            canal=Canal.whatsapp,
+            identificador="+5491122334455",
+            checkpointer=saver,
+        )
+
+    primera = await _mandar("ehh no sé, es un tema medio raro")
+    assert primera["caso_id"] is None, "sin saber de qué se trata no se abre caso"
+    assert RESPUESTA_OPCIONES in primera["respuesta"]
+
+    segunda = await _mandar("no sé cómo explicarlo")
+    assert segunda["caso_id"] is None
+    assert RESPUESTA_OPCIONES in segunda["respuesta"]
+
+    final = await _mandar("es complicado")
 
     assert final["requiere_escalado"] is True
-    assert final["respuesta"] == RESPUESTA_ESCALADO
 
     caso = await db_session.get(Caso, uuid.UUID(final["caso_id"]))
+    # El aviso explica el motivo y deja la referencia: sin ella el ciudadano no
+    # tiene con qué reclamar después.
+    assert MOTIVO_EN_CRIOLLO["confianza_baja"] in final["respuesta"]
+    assert caso.referencia in final["respuesta"]
+    assert CIERRE_ESCALADO in final["respuesta"]
     assert caso.estado == EstadoCaso.escalado
 
     auditorias = (

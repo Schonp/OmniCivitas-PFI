@@ -117,6 +117,10 @@ export interface Auditoria {
 
 export const ESTADOS: EstadoCaso[] = ["abierto", "en_progreso", "escalado", "cerrado"];
 
+// Los chips de la bandeja activa: un caso cerrado se archiva y ya no se filtra
+// por ahí, tiene su propia solapa.
+export const ESTADOS_ACTIVOS: EstadoCaso[] = ESTADOS.filter((estado) => estado !== "cerrado");
+
 export const ETIQUETA_ESTADO: Record<EstadoCaso, string> = {
   abierto: "Abierto",
   en_progreso: "En progreso",

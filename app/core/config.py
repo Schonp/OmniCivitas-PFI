@@ -16,6 +16,16 @@ class Settings(BaseSettings):
     agente_modelo_intake: str = "claude-haiku-4-5-20251001"
     agente_modelo_ejecutor: str = "claude-sonnet-5"
     agente_umbral_confianza: float = 0.6
+    # Minutos de silencio del agente sobre un caso que ya tiene una persona.
+    # Recién pasado ese rato vuelve a acusar recibo: si el ciudadano insiste a
+    # los dos minutos de que le dijeron que lo van a contactar, repetírselo no
+    # aporta nada. Bajalo para las demos, donde no se espera media hora.
+    agente_minutos_silencio_derivado: int = 30
+    # Cada cuánto se le vuelve a avisar al ciudadano que le contesta una IA. No
+    # es por caso: una conversación por WhatsApp puede abrir varios casos si va
+    # cambiando de tema, y repetirle el aviso en cada uno es exactamente lo que
+    # no queremos.
+    agente_horas_aviso_ia: int = 12
 
     jwt_secret_key: str = ""
     jwt_access_token_expire_hours: int = 8
@@ -24,6 +34,14 @@ class Settings(BaseSettings):
 
     fernet_key: str = ""
     hash_lookup_key: str = ""
+
+    # WhatsApp va por la Cloud API de Meta, sin intermediario. Twilio queda
+    # solo para el canal de voz de la fase siguiente.
+    whatsapp_api_version: str = "v25.0"
+    whatsapp_phone_number_id: str = ""
+    whatsapp_access_token: str = ""
+    whatsapp_app_secret: str = ""
+    whatsapp_verify_token: str = ""
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

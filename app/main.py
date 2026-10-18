@@ -18,6 +18,7 @@ from app.api import (
     reclamos,
     turnos,
     usuarios,
+    webhooks,
 )
 from app.core.config import settings
 
@@ -59,3 +60,4 @@ app.include_router(usuarios.router)
 app.include_router(turnos.router)
 app.include_router(conocimiento.router)
 app.include_router(reclamos.router)
+app.include_router(webhooks.router)

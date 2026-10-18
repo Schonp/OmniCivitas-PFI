@@ -140,7 +140,36 @@ class Caso(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    # Asunto del correo con el que se abrió el caso. Se guarda para que la
+    # respuesta del operador continúe el mismo hilo en la bandeja del ciudadano
+    # en vez de aparecer como un mensaje suelto.
+    asunto: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
     ciudadano: Mapped["Ciudadano"] = relationship(back_populates="casos")
+
+    @property
+    def referencia(self) -> str:
+        """Identificador legible para el ciudadano. El UUID es la clave interna;
+        mandárselo en un correo o un WhatsApp no le sirve a nadie y no es lo que
+        haría un organismo. Se deriva del propio id, así que no hace falta
+        columna nueva ni secuencia."""
+        prefijos = {
+            TipoCaso.reclamo: "REC",
+            TipoCaso.reserva: "RES",
+            TipoCaso.consulta: "CON",
+            TipoCaso.tramite: "TRA",
+        }
+        return f"{prefijos[self.tipo]}-{str(self.id)[:8].upper()}"
+
+    @property
+    def en_manos_humanas(self) -> bool:
+        """El caso ya lo tiene una persona: derivado esperando que lo tomen, o
+        tomado por un operador. Mientras esté así el agente no lo retoma, y lo
+        que el caso espera es la respuesta del operador, no la del agente."""
+        return (
+            self.estado in (EstadoCaso.escalado, EstadoCaso.en_progreso)
+            or self.operador_asignado_id is not None
+        )
     interacciones: Mapped[list["Interaccion"]] = relationship(back_populates="caso")
     auditorias: Mapped[list["Auditoria"]] = relationship(back_populates="caso")
     operador_asignado: Mapped["Usuario | None"] = relationship(back_populates="casos_asignados")

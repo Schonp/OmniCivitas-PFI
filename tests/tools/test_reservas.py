@@ -76,3 +76,37 @@ async def test_crear_reserva_con_fecha_invalida_falla(db_session, ciudadano, tur
             turno="licencia",
             fecha_hora="el viernes a la tarde",
         )
+
+
+async def test_crear_reserva_completa_el_caso_ya_abierto_en_vez_de_abrir_otro(
+    db_session, ciudadano, turno_licencia
+):
+    """Mismo bug que en reclamos: el caso se abre al pedir el turno (todavía sin
+    día ni horario) y, al confirmarlos, la tool creaba OTRO caso en vez de
+    completar el que ya estaba abierto."""
+    ya_abierto = Caso(
+        ciudadano_id=ciudadano.id,
+        tipo=TipoCaso.reserva,
+        canal_origen=Canal.whatsapp,
+        canal_actual=Canal.whatsapp,
+    )
+    db_session.add(ya_abierto)
+    await db_session.commit()
+
+    resultado = await crear_reserva(
+        db_session,
+        ciudadano_id=ciudadano.id,
+        canal=Canal.whatsapp,
+        turno="renovación de licencia",
+        fecha_hora="2026-08-15 10:00",
+        caso_id=ya_abierto.id,
+    )
+
+    assert resultado["caso_id"] == str(ya_abierto.id)
+
+    casos = (
+        (await db_session.execute(select(Caso).where(Caso.ciudadano_id == ciudadano.id)))
+        .scalars()
+        .all()
+    )
+    assert len(casos) == 1

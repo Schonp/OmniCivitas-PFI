@@ -6,8 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.resumen import generar_resumen_caso
+from app.channels import salida
 from app.core.dependencies import get_current_user, requiere_rol
-from app.db.crud.auditoria import listar_auditoria_de_caso
+from app.db.crud.auditoria import listar_auditoria_de_caso, registrar_auditoria
 from app.db.crud.casos import (
     actualizar_resumen_caso,
     asignar_caso,
@@ -21,9 +22,12 @@ from app.db.crud.casos import (
     responder_caso,
 )
 from app.db.crud.ciudadanos import obtener_ciudadano_por_id
-from app.db.crud.interacciones import listar_interacciones_de_caso
+from app.db.crud.interacciones import (
+    listar_interacciones_de_caso,
+    ultimo_mensaje_del_ciudadano,
+)
 from app.db.crud.usuarios import obtener_usuario_por_id
-from app.db.models import Caso, EstadoCaso, RolUsuario, Usuario
+from app.db.models import ActorInteraccion, Caso, EstadoCaso, RolUsuario, Usuario
 from app.db.session import get_db
 from app.schemas.auditoria import AuditoriaOut
 from app.schemas.caso import (
@@ -75,17 +79,26 @@ async def listar(
     estado: EstadoCaso | None = Query(default=None),
     q: str | None = Query(default=None, max_length=100),
     sin_asignar: bool = Query(default=False),
+    archivados: bool = Query(
+        default=False,
+        description="Solapa Archivados: solo cerrados. Por defecto, la bandeja activa los excluye.",
+    ),
     limite: int = Query(default=50, ge=1, le=200),
     desplazamiento: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     usuario_actual: Usuario = Depends(get_current_user),
 ) -> list[CasoOut]:
     operador_id = _filtro_de_visibilidad(usuario_actual)
+    # Un caso cerrado se archiva: la bandeja activa no lo vuelve a mostrar por
+    # más que el filtro sea "todos". Solo aparece pidiendo la solapa Archivados,
+    # que a su vez ignora cualquier chip de estado —ahí solo hay una cosa que
+    # mirar.
     filtros = {
-        "estado": estado,
+        "estado": EstadoCaso.cerrado if archivados else estado,
         "busqueda": q,
         "operador_id": operador_id,
         "solo_sin_asignar": sin_asignar and operador_id is None,
+        "excluir_estado": None if archivados else EstadoCaso.cerrado,
     }
 
     casos = await listar_casos(db, limite=limite, desplazamiento=desplazamiento, **filtros)
@@ -103,11 +116,17 @@ async def conteos(
     db: AsyncSession = Depends(get_db),
     usuario_actual: Usuario = Depends(get_current_user),
 ) -> ConteoCasosOut:
-    """Contadores de los filtros de la bandeja, con la visibilidad del rol."""
+    """Contadores de los filtros de la bandeja, con la visibilidad del rol.
+
+    `todos` es "todos los activos": no suma `cerrado`, que ya no vive en la
+    bandeja sino en la solapa Archivados. `por_estado` sigue trayendo el
+    conteo de cerrados —el frontend lo usa para el número de esa solapa.
+    """
     por_estado = await contar_casos_por_estado(
         db, operador_id=_filtro_de_visibilidad(usuario_actual)
     )
-    return ConteoCasosOut(todos=sum(por_estado.values()), por_estado=por_estado)
+    activos = sum(cantidad for estado, cantidad in por_estado.items() if estado != EstadoCaso.cerrado.value)
+    return ConteoCasosOut(todos=activos, por_estado=por_estado)
 
 
 @router.get("/exportar")
@@ -256,9 +275,33 @@ async def responder(
             detail="El caso está cerrado: reabralo antes de responder",
         )
 
-    return await responder_caso(
+    interaccion = await responder_caso(
         db, caso, datos.contenido, actor=usuario_actual.email, interna=datos.interna
     )
+
+    # Una nota interna no sale del organismo. Una respuesta sí: se transmite por
+    # el canal actual del caso y el resultado queda auditado, para que el panel
+    # pueda mostrar si el ciudadano efectivamente la recibió.
+    if not datos.interna:
+        ciudadano = await obtener_ciudadano_por_id(db, caso.ciudadano_id)
+        resultado = await salida.enviar_al_ciudadano(
+            caso.canal_actual,
+            ciudadano,
+            datos.contenido,
+            asunto=caso.asunto,
+            ultimo_entrante=await ultimo_mensaje_del_ciudadano(db, caso.id),
+        )
+        await registrar_auditoria(
+            db,
+            caso_id=caso.id,
+            accion="envio_saliente",
+            actor=usuario_actual.email,
+            actor_tipo=ActorInteraccion.operador,
+            metadata={"canal": caso.canal_actual.value, **resultado.como_metadata()},
+        )
+        await db.commit()
+
+    return interaccion
 
 
 @router.get("/{caso_id}/interacciones", response_model=list[InteraccionOut])

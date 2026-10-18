@@ -74,6 +74,7 @@ class CasoOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    referencia: str
     ciudadano_id: uuid.UUID
     ciudadano: CiudadanoResumen
     operador_asignado: OperadorResumen | None
