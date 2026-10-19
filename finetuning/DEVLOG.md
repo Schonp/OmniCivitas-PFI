@@ -481,3 +481,28 @@ corrió todavía — necesita la GPU de Colab, no esta máquina.
       cuatro alimentaran el mismo fine-tuning.
 - [ ] Integración en `app/agents/llm.py` para apuntar a Ollama vía endpoint
       compatible con OpenAI (sin empezar).
+
+---
+
+## 2026-10-19 — Se perdió un entrenamiento completo por no usar Drive
+
+Se corrió el entrenamiento del notebook de Colab durante la noche. Terminó las
+3 épocas, pero la sesión de Colab se desconectó antes de que alguien volviera a
+mirarla (por inactividad o por el límite de la cuenta gratis) y no había nada
+guardado en un lugar persistente: los checkpoints (`output_dir="outputs"`) y
+el export final (`save_pretrained_gguf`) escribían al disco efímero de la VM
+(`/content`), que se borra con la sesión. Resultado: 3 épocas de entrenamiento
+real, cero artefactos recuperables.
+
+Arreglo aplicado a `finetuning_qwen_colab.ipynb`: nueva celda (sección 1.5) que
+monta Google Drive al principio, antes de instalar nada; `output_dir` del
+`Trainer` y las llamadas de `save_pretrained`/`save_pretrained_gguf` ahora
+escriben dentro de `/content/drive/MyDrive/omnicivitas-finetune/` en vez de
+`/content`. Con esto, un corte de sesión a mitad de entrenamiento todavía
+pierde el progreso desde el último checkpoint de época, pero no el
+entrenamiento completo.
+
+Pendiente: volver a correr el entrenamiento completo desde cero (esta vez con
+Drive montado) y recién ahí correr la celda de evaluación sobre
+`prueba_tool_calling.jsonl` — los tres indicadores de la tesis siguen sin una
+medición real.
