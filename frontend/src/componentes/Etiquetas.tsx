@@ -1,4 +1,4 @@
-import { Globe, Mail, MessageCircle, Phone, type LucideIcon } from "lucide-react";
+import { Mail, MessageCircle, Phone, type LucideIcon } from "lucide-react";
 
 import {
   ETIQUETA_CANAL,
@@ -20,7 +20,6 @@ const ICONO_CANAL: Record<Canal, LucideIcon> = {
   whatsapp: MessageCircle,
   email: Mail,
   voz: Phone,
-  web: Globe,
 };
 
 export function EstadoBadge({ estado }: { estado: EstadoCaso }) {

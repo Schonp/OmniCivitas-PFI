@@ -10,8 +10,6 @@ class Settings(BaseSettings):
     database_url: str = ""
     test_database_url: str = ""
 
-    redis_url: str = ""
-
     anthropic_api_key: str = ""
     agente_modelo_intake: str = "claude-haiku-4-5-20251001"
     agente_modelo_ejecutor: str = "claude-sonnet-5"
@@ -30,7 +28,6 @@ class Settings(BaseSettings):
     jwt_secret_key: str = ""
     jwt_access_token_expire_hours: int = 8
     jwt_refresh_token_expire_days: int = 7
-    chat_session_expire_hours: int = 4
 
     fernet_key: str = ""
     hash_lookup_key: str = ""
@@ -47,6 +44,10 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_whatsapp_number: str = ""
     twilio_voice_number: str = ""
+    # URL pública wss:// del WebSocket de Media Streams (ver app/channels/voz.py).
+    # Twilio exige wss, nunca ws -- no puede ser localhost en producción. Para
+    # probar en desarrollo hace falta un túnel (ej. ngrok) y poner acá su URL wss.
+    voz_websocket_url: str = ""
 
     imap_host: str = ""
     imap_port: int = 993
@@ -57,7 +58,10 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
 
-    whisper_api_key: str = ""
+    # Servicio propio de ASR/TTS (faster-whisper + Kokoro), separado del proceso
+    # de la API -- mismo patrón que el LLM, que corre aparte vía Ollama y no
+    # adentro de este proceso. Ver voz_asr_tts/.
+    voz_asr_tts_url: str = "http://localhost:8001"
 
     rate_limit_per_minute: int = 100
 

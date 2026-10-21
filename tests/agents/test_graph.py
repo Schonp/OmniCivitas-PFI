@@ -46,7 +46,7 @@ async def test_procesar_mensaje_sin_checkpointer_inicializado_falla(db_session, 
     el setup dentro del request y se bloqueaba contra su propia transacción."""
     with pytest.raises(RuntimeError, match="checkpointer"):
         await procesar_mensaje(
-            db_session, mensaje="hola", canal=Canal.web, identificador="juan.perez@test.com"
+            db_session, mensaje="hola", canal=Canal.email, identificador="juan.perez@test.com"
         )
 
 

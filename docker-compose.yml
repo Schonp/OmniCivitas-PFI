@@ -16,11 +16,6 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
   backend:
     build: .
     env_file: .env
@@ -29,14 +24,11 @@ services:
       # (localhost): dentro de la red de Compose, los servicios se resuelven
       # por nombre.
       DATABASE_URL: postgresql+asyncpg://omnicivitas:omnicivitas@db:5432/omnicivitas
-      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
-      redis:
-        condition: service_started
     volumes:
       - ./app:/app/app
 

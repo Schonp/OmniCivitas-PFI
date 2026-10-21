@@ -33,6 +33,9 @@ Reglas:
 - Al informarle un número de caso al ciudadano usá siempre el campo `referencia`\n  que devuelve la herramienta (ej. REC-5072BFA2). Nunca le muestres `caso_id`.
 - Saludá al inicio de la conversación y, si sabés el nombre del ciudadano, usalo.
 - Al terminar, confirmá qué se hizo y cuál es el próximo paso.
+- Derivá solo si no podés resolver ni con la información del organismo ni con las\n  herramientas. Nunca derives una consulta que ya podés contestar. Cuando\n  corresponda derivar, no te limites a decir que no podés: llamá a\n  `derivar_a_operador` para que una persona la retome."""
+
+FORMATO_TEXTO = """
 
 Formato de la respuesta (el mensaje se lee en WhatsApp o en un correo):
 - Escribí en texto plano. Nada de Markdown: ni asteriscos, ni almohadillas, ni guiones
@@ -41,8 +44,22 @@ Formato de la respuesta (el mensaje se lee en WhatsApp o en un correo):
   un bloque largo.
 - Cuando informes datos concretos (número de caso, área, plazo, día y hora de un
   turno), poné cada uno en su propia línea con una etiqueta adelante.
-- No más de cuatro o cinco líneas de texto corrido por bloque.
-- Derivá solo si no podés resolver ni con la información del organismo ni con las\n  herramientas. Nunca derives una consulta que ya podés contestar. Cuando\n  corresponda derivar, no te limites a decir que no podés: llamá a\n  `derivar_a_operador` para que una persona la retome."""
+- No más de cuatro o cinco líneas de texto corrido por bloque."""
+
+# Un párrafo con "etiqueta: valor" por línea se lee perfecto y se escucha
+# rarísimo (el TTS lo sintetiza como una lista entrecortada, con pausas donde
+# no las hay en una conversación real). Y cada palabra de más en una llamada
+# es audio real que hay que sintetizar y esperar -- ver voz_asr_tts/DEVLOG.md,
+# "Diferenciar voz de texto".
+FORMATO_VOZ = """
+
+Formato de la respuesta (es una llamada telefónica: se escucha, no se lee):
+- Hablá en oraciones completas y fluidas, como en una conversación real. Nunca uses
+  listas, numeración ni "etiqueta: valor" en líneas separadas.
+- Sé breve: dos o tres oraciones cortas por turno, nunca un discurso largo.
+- Si tenés que decir un número de caso, decilo una sola vez y seguí; no lo repitas
+  ni lo deletrees letra por letra.
+- No ofrezcas un menú de opciones: preguntá una sola cosa concreta por vez."""
 
 # Se agrega al system prompt cuando el ciudadano escribe por primera vez y todavía
 # no sabemos quién es. El organismo necesita identificarlo para gestionar cualquier
@@ -201,7 +218,8 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
     # esto el ejecutor solo ve el mensaje actual y le vuelve a preguntar al
     # ciudadano algo que ya dijo antes, que es justamente lo que el proyecto
     # busca evitar. El nodo de contexto ya lo trae sin las notas internas.
-    mensajes: list = [SystemMessage(content=SYSTEM_EJECUTOR + contexto_extra)]
+    formato = FORMATO_VOZ if Canal(state["canal"]) == Canal.voz else FORMATO_TEXTO
+    mensajes: list = [SystemMessage(content=SYSTEM_EJECUTOR + formato + contexto_extra)]
     for entrada in state.get("historial") or []:
         contenido = entrada.get("contenido") or ""
         if not contenido:

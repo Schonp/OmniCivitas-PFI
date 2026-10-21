@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+faster-whisper==1.2.1
+kokoro==0.9.4
+numpy==2.5.4
+# faster-whisper==1.2.1 llama a una API de PyAV que la 19.x eliminó
+# (metadata_errors en av.open) -- ver SYSTRAN/faster-whisper#1589. Pineado
+# a la última versión confirmada como funcional.
+av==18.1.0

@@ -10,7 +10,6 @@ from app.api import (
     agente,
     auth,
     casos,
-    chat,
     ciudadanos,
     conocimiento,
     health,
@@ -21,6 +20,15 @@ from app.api import (
     webhooks,
 )
 from app.core.config import settings
+
+# Sin esto, los logger.info/debug de la app se los come el "handler de último
+# recurso" de Python (solo deja pasar WARNING+) porque nada más en el proceso
+# llama basicConfig -- uvicorn configura sus propios loggers, no el root.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+    datefmt="%H:%M:%S",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +62,6 @@ app.include_router(auth.router)
 app.include_router(ciudadanos.router)
 app.include_router(casos.router)
 app.include_router(agente.router)
-app.include_router(chat.router)
 app.include_router(metricas.router)
 app.include_router(usuarios.router)
 app.include_router(turnos.router)

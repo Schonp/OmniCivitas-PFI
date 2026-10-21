@@ -227,13 +227,28 @@ async def test_metrica_cuenta_casos_demorados(client, db_session, auth_headers):
     assert cuerpo["horas_umbral_demora"] == 24
 
 
-async def test_nota_interna_no_llega_al_ciudadano(client, db_session, auth_headers, ciudadano):
+async def test_nota_interna_no_llega_al_ciudadano(
+    client, db_session, auth_headers, ciudadano, mocker
+):
+    enviar = mocker.patch("app.channels.salida.whatsapp.enviar_mensaje")
     creado = await client.post(
         "/api/casos",
-        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "web"},
+        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "whatsapp"},
         headers=auth_headers,
     )
     caso_id = creado.json()["id"]
+    # Mensaje reciente del ciudadano: la ventana de 24 h de WhatsApp queda
+    # abierta y la respuesta del operador sí se transmite.
+    db_session.add(
+        Interaccion(
+            caso_id=caso_id,
+            contenido="¿Cómo va mi reclamo?",
+            canal=Canal.whatsapp,
+            actor=ActorInteraccion.ciudadano,
+            timestamp=AHORA - timedelta(minutes=5),
+        )
+    )
+    await db_session.commit()
 
     await client.post(
         f"/api/casos/{caso_id}/respuesta",
@@ -247,25 +262,15 @@ async def test_nota_interna_no_llega_al_ciudadano(client, db_session, auth_heade
     )
 
     del_panel = await client.get(f"/api/casos/{caso_id}/interacciones", headers=auth_headers)
-    assert [i["interna"] for i in del_panel.json()] == [True, False]
+    assert [i["interna"] for i in del_panel.json()] == [False, True, False]
 
-    sesion = await client.post(
-        "/api/chat/sesion",
-        json={"documento": ciudadano.documento, "nombre": ciudadano.nombre, "email": ciudadano.email},
-    )
-    historial = await client.get(
-        "/api/chat/historial",
-        headers={"Authorization": f"Bearer {sesion.json()['token']}"},
-    )
-
-    contenidos = [i["contenido"] for i in historial.json()["interacciones"]]
-    assert contenidos == ["Su reclamo está en revisión."]
+    enviar.assert_awaited_once_with(ciudadano.telefono, "Su reclamo está en revisión.")
 
 
 async def test_nota_interna_se_permite_con_caso_cerrado(client, auth_headers, ciudadano):
     creado = await client.post(
         "/api/casos",
-        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "web"},
+        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "whatsapp"},
         headers=auth_headers,
     )
     caso_id = creado.json()["id"]
@@ -293,7 +298,7 @@ async def test_nota_interna_se_permite_con_caso_cerrado(client, auth_headers, ci
 async def test_cerrar_sin_motivo_devuelve_422(client, auth_headers, ciudadano):
     creado = await client.post(
         "/api/casos",
-        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "web"},
+        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "whatsapp"},
         headers=auth_headers,
     )
 
@@ -309,7 +314,7 @@ async def test_cerrar_sin_motivo_devuelve_422(client, auth_headers, ciudadano):
 async def test_cerrar_con_motivo_lo_persiste_y_audita(client, auth_headers, ciudadano):
     creado = await client.post(
         "/api/casos",
-        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "web"},
+        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "whatsapp"},
         headers=auth_headers,
     )
     caso_id = creado.json()["id"]

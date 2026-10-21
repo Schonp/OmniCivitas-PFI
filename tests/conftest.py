@@ -158,6 +158,26 @@ def checkpointer_en_memoria(mocker) -> InMemorySaver:
     async def _procesar(db, **kwargs):
         return await procesar_mensaje(db, **kwargs, checkpointer=saver)
 
-    for canal in ("web", "whatsapp", "email"):
+    for canal in ("whatsapp", "email", "voz"):
         mocker.patch(f"app.channels.{canal}.procesar_mensaje", side_effect=_procesar)
     return saver
+
+
+@pytest.fixture
+def mock_asr_tts(mocker):
+    """Mockea el servicio de ASR/TTS del canal de voz (`voz_asr_tts/`, llamado
+    por HTTP). Nunca correr faster-whisper/Kokoro de verdad en tests: son
+    modelos pesados y necesitarían audio real, no el silencio/tono sintético
+    que arma un test."""
+
+    def _configurar(texto_transcripto: str = "", audio_sintetizado: bytes = b"\x00\x00" * 100) -> None:
+        mocker.patch(
+            "app.channels.voz.transcribir", new=AsyncMock(return_value=texto_transcripto)
+        )
+
+        async def _pcm_fake(texto: str):
+            yield audio_sintetizado
+
+        mocker.patch("app.channels.voz.sintetizar_streaming", new=_pcm_fake)
+
+    return _configurar

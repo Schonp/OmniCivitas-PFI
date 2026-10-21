@@ -17,7 +17,7 @@ def _mock_llm_resumen(mocker, texto: str = "La ciudadana reclama por una luminar
 async def _crear_caso(client, auth_headers, ciudadano) -> str:
     creado = await client.post(
         "/api/casos",
-        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "web"},
+        json={"ciudadano_id": str(ciudadano.id), "tipo": "reclamo", "canal_origen": "whatsapp"},
         headers=auth_headers,
     )
     return creado.json()["id"]
@@ -32,7 +32,7 @@ async def test_generar_resumen_lo_persiste_y_audita(
         Interaccion(
             caso_id=caso_id,
             contenido="Se rompió la luminaria de mi cuadra.",
-            canal=Canal.web,
+            canal=Canal.whatsapp,
             actor=ActorInteraccion.ciudadano,
         )
     )
@@ -71,7 +71,7 @@ async def test_resumen_excluye_notas_internas_del_contexto(
         Interaccion(
             caso_id=caso_id,
             contenido="Reclamo por bache en la calle.",
-            canal=Canal.web,
+            canal=Canal.whatsapp,
             actor=ActorInteraccion.ciudadano,
         )
     )
@@ -101,7 +101,7 @@ async def test_resumen_con_llm_caido_devuelve_502(
         Interaccion(
             caso_id=caso_id,
             contenido="¿Cómo renuevo mi licencia?",
-            canal=Canal.web,
+            canal=Canal.whatsapp,
             actor=ActorInteraccion.ciudadano,
         )
     )

@@ -38,15 +38,6 @@ def crear_refresh_token(usuario_id: str, rol: str) -> str:
     return _crear_token(usuario_id, rol, "refresh", expira_en)
 
 
-def crear_chat_token(ciudadano_id: str) -> str:
-    """Sesión del chat web: identifica a un ciudadano, no a un usuario del panel.
-    Sin rol — nunca da acceso a los endpoints internos (`tipo != "access"`)."""
-    ahora = datetime.now(timezone.utc)
-    expira_en = timedelta(hours=settings.chat_session_expire_hours)
-    payload = {"sub": ciudadano_id, "tipo": "chat", "iat": ahora, "exp": ahora + expira_en}
-    return jwt.encode(payload, settings.jwt_secret_key, algorithm=JWT_ALGORITHM)
-
-
 def decodificar_token(token: str) -> dict[str, Any]:
     """Levanta jwt.PyJWTError (o subclases) si el token es inválido o expiró."""
     return jwt.decode(token, settings.jwt_secret_key, algorithms=[JWT_ALGORITHM])

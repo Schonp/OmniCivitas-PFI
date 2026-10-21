@@ -44,15 +44,15 @@ class EstadoCaso(str, enum.Enum):
 class Canal(str, enum.Enum):
     """Canales del prototipo: WhatsApp, email y llamada telefónica.
 
-    `web` es el simulador de canal que sostiene la demo hasta que Twilio e
-    IMAP/SMTP estén integrados; se elimina después de la entrega del 22/8,
-    junto con el valor `sms` que quedó huérfano en el tipo enum de Postgres.
+    Ni `sms` ni `web` existen más en el tipo enum de Postgres: `sms` quedó
+    huérfano desde el día cero (migración `c6730a402335`) y `web`, el chat
+    propio que sostuvo la demo hasta tener Twilio e IMAP/SMTP, se retiró en
+    la migración `3b9e5d1f7a20`.
     """
 
     whatsapp = "whatsapp"
     email = "email"
     voz = "voz"
-    web = "web"
 
 
 class ActorInteraccion(str, enum.Enum):

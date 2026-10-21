@@ -2,7 +2,7 @@ import uuid
 
 from langchain_core.messages import AIMessage
 
-from app.channels import web
+from app.channels import whatsapp
 from app.schemas.agente import ClasificacionIntent
 
 
@@ -49,7 +49,7 @@ async def test_cambio_estado_caso_registra_auditoria(client, auth_headers):
     ciudadano_id = await _crear_ciudadano(client, auth_headers)
     creado = await client.post(
         "/api/casos",
-        json={"ciudadano_id": ciudadano_id, "tipo": "consulta", "canal_origen": "web"},
+        json={"ciudadano_id": ciudadano_id, "tipo": "consulta", "canal_origen": "whatsapp"},
         headers=auth_headers,
     )
     caso_id = creado.json()["id"]
@@ -85,7 +85,7 @@ async def test_listar_casos_incluye_ciudadano(client, auth_headers):
     ciudadano_id = await _crear_ciudadano(client, auth_headers, documento="20304051")
     await client.post(
         "/api/casos",
-        json={"ciudadano_id": ciudadano_id, "tipo": "reclamo", "canal_origen": "web"},
+        json={"ciudadano_id": ciudadano_id, "tipo": "reclamo", "canal_origen": "whatsapp"},
         headers=auth_headers,
     )
 
@@ -106,7 +106,7 @@ async def test_interacciones_de_caso_en_orden_cronologico(
     """Las interacciones que el panel muestra son las que persiste el grafo."""
     creado = await client.post(
         "/api/casos",
-        json={"ciudadano_id": str(ciudadano.id), "tipo": "consulta", "canal_origen": "web"},
+        json={"ciudadano_id": str(ciudadano.id), "tipo": "consulta", "canal_origen": "whatsapp"},
         headers=auth_headers,
     )
     caso_id = creado.json()["id"]
@@ -115,7 +115,9 @@ async def test_interacciones_de_caso_en_orden_cronologico(
         ClasificacionIntent(intencion="consulta", entidades={}, confianza=0.9),
         respuestas_ejecutor=[AIMessage(content="Su caso está en revisión.")],
     )
-    await web.recibir_mensaje(db_session, ciudadano=ciudadano, mensaje="¿Cómo sigue mi trámite?")
+    await whatsapp.recibir_mensaje(
+        db_session, telefono=ciudadano.telefono, mensaje="¿Cómo sigue mi trámite?"
+    )
 
     response = await client.get(f"/api/casos/{caso_id}/interacciones", headers=auth_headers)
 
@@ -128,7 +130,7 @@ async def test_interacciones_de_caso_en_orden_cronologico(
 async def _crear_caso(client, auth_headers, ciudadano_id: str, tipo: str = "reclamo") -> dict:
     respuesta = await client.post(
         "/api/casos",
-        json={"ciudadano_id": ciudadano_id, "tipo": tipo, "canal_origen": "web"},
+        json={"ciudadano_id": ciudadano_id, "tipo": tipo, "canal_origen": "whatsapp"},
         headers=auth_headers,
     )
     return respuesta.json()

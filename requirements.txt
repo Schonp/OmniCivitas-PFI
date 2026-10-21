@@ -3,7 +3,6 @@ uvicorn[standard]==0.34.0
 pydantic-settings==2.7.1
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
-redis==5.2.1
 alembic==1.18.5
 cryptography==49.0.0
 passlib==1.7.4
@@ -16,3 +15,11 @@ langchain-core==1.5.1
 psycopg[binary]==3.3.4
 psycopg-pool==3.3.1
 httpx==0.28.1
+# Twilio manda el webhook de voz form-encoded (no JSON); sin esto
+# request.form() tira AssertionError en vez de parsear el body.
+python-multipart==0.0.20
+# Solo para RequestValidator (valida X-Twilio-Signature). Twilio desaconseja
+# reimplementar ese algoritmo a mano (a diferencia del de Meta para WhatsApp,
+# que sí se reimplementó en app/channels/whatsapp.py) -- ver voz_asr_tts/
+# DEVLOG.md ("Validación de firma de Twilio").
+twilio==9.12.0

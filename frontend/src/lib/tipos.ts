@@ -1,6 +1,6 @@
 export type EstadoCaso = "abierto" | "en_progreso" | "escalado" | "cerrado";
 export type TipoCaso = "consulta" | "reclamo" | "reserva" | "tramite";
-export type Canal = "whatsapp" | "email" | "voz" | "web";
+export type Canal = "whatsapp" | "email" | "voz";
 export type ActorInteraccion = "ciudadano" | "agente_ia" | "operador";
 export type RolUsuario = "operador" | "supervisor";
 
@@ -139,7 +139,6 @@ export const ETIQUETA_CANAL: Record<Canal, string> = {
   whatsapp: "WhatsApp",
   email: "Email",
   voz: "Llamada",
-  web: "Chat web",
 };
 
 export const ETIQUETA_ACTOR: Record<ActorInteraccion, string> = {

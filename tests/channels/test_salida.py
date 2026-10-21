@@ -38,16 +38,6 @@ async def test_envia_por_whatsapp_al_telefono(mocker):
     enviar.assert_awaited_once_with("+5491133334444", "Ya lo derivamos.")
 
 
-async def test_el_canal_web_no_transmite_y_no_es_error(mocker):
-    enviar = mocker.patch.object(salida.canal_email, "enviar_mensaje")
-
-    resultado = await salida.enviar_al_ciudadano(Canal.web, CIUDADANO, "Ya lo derivamos.")
-
-    assert resultado.transmitido is False
-    assert resultado.motivo == "canal_sin_envio"
-    enviar.assert_not_called()
-
-
 async def test_sin_contacto_no_intenta_enviar(mocker):
     enviar = mocker.patch.object(salida.canal_email, "enviar_mensaje")
     sin_email = Ciudadano(documento="1", nombre="Sin Email", telefono="+5491100000000")

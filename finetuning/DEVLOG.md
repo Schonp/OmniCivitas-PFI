@@ -458,9 +458,9 @@ corrió todavía — necesita la GPU de Colab, no esta máquina.
 
 ### Qué queda para la próxima sesión
 
-- [ ] Correr el notebook en Colab y registrar los resultados reales de los
-      tres indicadores — hoy son metas, no mediciones (igual que aclara
-      `chapter04.tex`).
+- [x] Correr el notebook en Colab y registrar los resultados reales de los
+      tres indicadores — hecho el 2026-10-19, ver entrada más abajo
+      ("Entrenamiento completo, export a GGUF y primera medición real").
 - [ ] Ampliar el dataset para cubrir `registrar_identidad` y
       `derivar_a_operador`, o decidir explícitamente dejarlos fuera del
       fine-tuning y resolverlos por código en vez de por el modelo.
@@ -506,3 +506,98 @@ Pendiente: volver a correr el entrenamiento completo desde cero (esta vez con
 Drive montado) y recién ahí correr la celda de evaluación sobre
 `prueba_tool_calling.jsonl` — los tres indicadores de la tesis siguen sin una
 medición real.
+
+---
+
+## 2026-10-19 — Entrenamiento completo, export a GGUF y primera medición real
+
+Se volvió a correr el entrenamiento desde cero (con Drive montado, ver entrada
+anterior) y esta vez terminó sin perder nada: las 3 épocas, el
+`save_pretrained` y el `save_pretrained_gguf` (exportación para Ollama)
+quedaron escritos en Drive. Tardó cerca de 6 horas de principio a fin en la
+GPU gratuita de Colab.
+
+### Primera medición real de los tres indicadores
+
+Con el modelo ya exportado a GGUF, se corrió por primera vez la celda de
+evaluación sobre las 67 instrucciones de `prueba_tool_calling.jsonl` (el
+conjunto de prueba, disjunto de entrenamiento/validación):
+
+| Indicador | Resultado |
+|---|---|
+| Exactitud de intención | 100% (67/67) |
+| Falsos positivos (confianza ≥ 0,6, categoría incorrecta) | 0 |
+| Confiabilidad de tool calling (herramienta Y parámetros exactos) | 92,5% (62/67) |
+
+El modelo evaluado es el mismo estado que terminó exportado a `.gguf`, no un
+punto intermedio anterior a la conversión: el número de tool calling es
+representativo de lo que efectivamente va a correr vía Ollama, no de una
+versión previa del modelo.
+
+### Los 5 fallos de tool calling, revisados caso por caso
+
+El script de evaluación compara la llamada a herramienta predicha contra la
+esperada con `==` sobre el diccionario completo, incluyendo campos de texto
+libre (`descripcion`, `referencia`). Al revisar el detalle de los 5 fallos
+(reconstruido a mano, porque el script original no guardaba el `pred` de cada
+ejemplo, sólo si había coincidido), aparecieron dos grupos bien distintos:
+
+**3 de los 5 no son fallas reales, son un defecto de la métrica.** En los tres
+casos la herramienta y los parámetros estructurados (`categoria`, el nombre
+de la tool) coinciden exactamente; lo único que difiere es la redacción de un
+campo de texto libre, una paráfrasis válida de lo mismo:
+
+- *"Hace tres días que no pasa el camión de la basura..."* → esperado
+  `"No pasa el camión de recolección de basura desde hace tres días en
+  Belgrano al 500"`, predicho `"Camión de recolección de basura sin pasar por
+  la cuadra en Belgrano al 500"`. Misma tool, misma categoría.
+- *"¿Cómo sigue el reclamo que hice la semana pasada?"* → `referencia`
+  esperada `"reclamo semana pasada"`, predicha `"reclamo pasado"`.
+- *"¿Me puede decir cómo sigue el reclamo del semáforo?"* → `referencia`
+  esperada `"el reclamo del semáforo"`, predicha `"semáforo"`.
+
+Comparar estos campos con igualdad exacta de string penaliza al modelo por
+decir lo mismo con otras palabras. El 92,5% medido es un piso pesimista: la
+exactitud real sobre herramienta + parámetros estructurados es más alta.
+Queda pendiente corregir el script para no exigir coincidencia exacta en
+campos de texto libre (comparar sólo `nombre` + parámetros no-textuales, o
+una métrica de similitud para los textuales) antes de citar el número en la
+tesis.
+
+**Los otros 2 quedaron sin diagnóstico confiable, y vale la pena dejarlo
+documentado en vez de inventar una explicación:**
+
+- *"¿Cómo viene mi trámite?"* (esperado: `consultar_estado_caso` con
+  `referencia: ""`) y *"La plaza San Martín está llena de pozos..."*
+  (esperado: `crear_reclamo`, categoría `infraestructura`) contaron como
+  fallo en la corrida de los 67 con JSON válido en ambos casos
+  (`sin_json_valido: 0` en esa corrida). Al reconstruir el detalle
+  regenerando sólo estas dos instrucciones más tarde, la generación devolvió
+  texto sin un tool call parseable (`pred = None`) en las dos.
+- `generar()` usa `do_sample=False` (greedy, determinístico — `temperature`
+  directamente se ignora con `do_sample=False`), así que en principio la
+  misma instrucción tendría que generar lo mismo siempre. Que haya dado
+  distinto sugiere que el estado de `model` cambió entre la corrida de los 67
+  y esta regeneración puntual — la causa más probable es la celda de export a
+  GGUF, que corrió *antes* de la evaluación de los 67 pero bien podría haber
+  dejado el objeto `model` modificado en memoria de una forma que un
+  `generate()` posterior ya no reproduce igual.
+- No se confirmó la causa exacta y no corresponde darla por buena sin
+  evidencia. Para saberlo de verdad hay que volver a correr el *loop completo*
+  de evaluación (no el entrenamiento, que es lo que tarda las 6 horas: sólo
+  inferencia sobre 67 ejemplos, unos minutos) guardando `pred` y `crudo` de
+  cada ejemplo en `detalle` desde el principio, para no depender nunca más de
+  regenerar nada a mano.
+
+### Qué queda para la próxima sesión
+
+- [ ] Corregir el script de evaluación para no penalizar paráfrasis válidas en
+      campos de texto libre (`descripcion`, `referencia`) antes de citar el
+      92,5% en la tesis.
+- [ ] Volver a correr el loop de evaluación completo guardando `pred`/`crudo`
+      por ejemplo, para poder diagnosticar cualquier fallo futuro sin
+      regenerar nada (y sin el riesgo de hacerlo sobre un `model` que ya
+      cambió de estado).
+- [ ] Integración en `app/agents/llm.py` para apuntar a Ollama vía el
+      endpoint compatible con OpenAI, con el `.gguf` ya exportado (sin
+      empezar).

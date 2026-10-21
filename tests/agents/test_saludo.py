@@ -12,9 +12,26 @@ import pytest
 from sqlalchemy import select
 
 from app.agents.graph import decidir_ruta, procesar_mensaje
-from app.agents.saludo import RESPUESTA_SALUDO
+from app.agents.saludo import RESPUESTA_SALUDO, armar_saludo
 from app.db.models import Canal, Caso, EstadoCaso, Interaccion, TipoCaso
 from app.schemas.agente import ClasificacionIntent
+
+
+def test_el_saludo_por_voz_no_tiene_menu_numerado():
+    """Un menú de 3 opciones se lee bien pero se escucha como un formulario:
+    por voz se abre con una pregunta, no con una lista (ver DEVLOG.md de
+    voz_asr_tts, "Diferenciar voz de texto")."""
+    saludo = armar_saludo([], canal=Canal.voz)
+
+    assert "1." not in saludo
+    assert "2." not in saludo
+    assert saludo != RESPUESTA_SALUDO
+
+
+def test_el_saludo_por_whatsapp_mantiene_el_menu():
+    saludo = armar_saludo([], canal=Canal.whatsapp)
+
+    assert saludo == RESPUESTA_SALUDO
 
 
 def _estado(intencion: str, **extra):

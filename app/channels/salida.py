@@ -23,10 +23,6 @@ from app.db.models import ActorInteraccion, Canal, Ciudadano
 
 logger = logging.getLogger(__name__)
 
-# Canales que solo muestran la respuesta cuando el ciudadano consulta su
-# conversación: no hay nada que transmitir.
-SIN_ENVIO = {Canal.web}
-
 ACTOR_AGENTE = "agente_ia"
 
 
@@ -81,9 +77,6 @@ async def enviar_al_ciudadano(
     """
     if not texto.strip():
         return ResultadoEnvio(False, "texto_vacio")
-
-    if canal in SIN_ENVIO:
-        return ResultadoEnvio(False, "canal_sin_envio")
 
     if canal == Canal.voz:
         # La llamada no admite texto asincrónico: queda para la fase de voz.

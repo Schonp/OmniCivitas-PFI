@@ -70,7 +70,7 @@ async def _crear_usuarios_demo(db) -> Usuario:
 
 
 async def _caso_reclamo_cross_canal(db, operador: Usuario) -> None:
-    """El caso testigo de la tesis: nace en WhatsApp y sigue en el chat web."""
+    """El caso testigo de la tesis: nace en WhatsApp y sigue por correo electrónico."""
     ciudadana = Ciudadano(
         documento="28456789",
         nombre="María López",
@@ -85,7 +85,7 @@ async def _caso_reclamo_cross_canal(db, operador: Usuario) -> None:
         tipo=TipoCaso.reclamo,
         estado=EstadoCaso.en_progreso,
         canal_origen=Canal.whatsapp,
-        canal_actual=Canal.web,
+        canal_actual=Canal.email,
         operador_asignado_id=operador.id,
         created_at=hace(52),
         updated_at=hace(3),
@@ -99,12 +99,12 @@ async def _caso_reclamo_cross_canal(db, operador: Usuario) -> None:
         (hace(51.9), Canal.whatsapp, ActorInteraccion.agente_ia,
          "Buen día. Registré su reclamo por falta de recolección con el número "
          "REC-1042. El área de Higiene Urbana tiene 72 horas hábiles para responder."),
-        (hace(4), Canal.web, ActorInteraccion.ciudadano,
+        (hace(4), Canal.email, ActorInteraccion.ciudadano,
          "Buenas, quería saber cómo viene el reclamo que hice por WhatsApp."),
-        (hace(3.9), Canal.web, ActorInteraccion.agente_ia,
+        (hace(3.9), Canal.email, ActorInteraccion.agente_ia,
          "Su reclamo REC-1042 por falta de recolección está en progreso: fue "
          "derivado a Higiene Urbana el martes. No necesita volver a cargarlo."),
-        (hace(3), Canal.web, ActorInteraccion.operador,
+        (hace(3), Canal.email, ActorInteraccion.operador,
          "Confirmo que el camión pasa mañana por la mañana. Dejo el caso en seguimiento."),
     ]
     for momento, canal, actor, contenido in conversacion:
@@ -120,7 +120,7 @@ async def _caso_reclamo_cross_canal(db, operador: Usuario) -> None:
         (hace(51.9), "respuesta_ia", ACTOR_AGENTE, ActorInteraccion.agente_ia,
          {"intencion": "reclamo", "confianza": 0.92, "escalado": False}),
         (hace(3.9), "cambio_canal", ACTOR_AGENTE, ActorInteraccion.agente_ia,
-         {"canal_anterior": "whatsapp", "canal_nuevo": "web"}),
+         {"canal_anterior": "whatsapp", "canal_nuevo": "email"}),
         (hace(3.9), "respuesta_ia", ACTOR_AGENTE, ActorInteraccion.agente_ia,
          {"intencion": "consulta", "confianza": 0.88, "escalado": False}),
         (hace(3), "cambio_estado", SUPERVISOR_DEMO, ActorInteraccion.operador,
@@ -218,8 +218,8 @@ async def _caso_escalado(db) -> None:
         ciudadano_id=ciudadana.id,
         tipo=TipoCaso.tramite,
         estado=EstadoCaso.escalado,
-        canal_origen=Canal.web,
-        canal_actual=Canal.web,
+        canal_origen=Canal.email,
+        canal_actual=Canal.email,
         created_at=hace(6),
         updated_at=hace(6),
     )
@@ -232,7 +232,7 @@ async def _caso_escalado(db) -> None:
                 caso_id=caso.id,
                 contenido="Necesito presentar una denuncia por un problema con una "
                 "inspección que me hicieron, tengo documentación para adjuntar.",
-                canal=Canal.web,
+                canal=Canal.email,
                 actor=ActorInteraccion.ciudadano,
                 timestamp=hace(6),
             ),
@@ -240,7 +240,7 @@ async def _caso_escalado(db) -> None:
                 caso_id=caso.id,
                 contenido="Su solicitud fue derivada a un operador, que lo contactará a "
                 "la brevedad por este mismo medio. Gracias por comunicarse.",
-                canal=Canal.web,
+                canal=Canal.email,
                 actor=ActorInteraccion.agente_ia,
                 timestamp=hace(5.95),
             ),
@@ -277,8 +277,8 @@ async def _caso_reserva_abierta(db) -> None:
         ciudadano_id=ciudadano.id,
         tipo=TipoCaso.reserva,
         estado=EstadoCaso.abierto,
-        canal_origen=Canal.web,
-        canal_actual=Canal.web,
+        canal_origen=Canal.whatsapp,
+        canal_actual=Canal.whatsapp,
         created_at=hace(34),
         updated_at=hace(30),
     )
@@ -291,7 +291,7 @@ async def _caso_reserva_abierta(db) -> None:
                 caso_id=caso.id,
                 contenido="Quiero sacar un turno para renovar la licencia de conducir "
                 "la semana que viene.",
-                canal=Canal.web,
+                canal=Canal.whatsapp,
                 actor=ActorInteraccion.ciudadano,
                 timestamp=hace(34),
             ),
@@ -299,7 +299,7 @@ async def _caso_reserva_abierta(db) -> None:
                 caso_id=caso.id,
                 contenido="Registré su solicitud de turno para renovación de licencia. "
                 "Le vamos a confirmar día y hora por este mismo canal.",
-                canal=Canal.web,
+                canal=Canal.whatsapp,
                 actor=ActorInteraccion.agente_ia,
                 timestamp=hace(33.9),
             ),
@@ -308,7 +308,7 @@ async def _caso_reserva_abierta(db) -> None:
             Interaccion(
                 caso_id=caso.id,
                 contenido="Perdón, ¿el turno me lo confirman por acá o me llaman?",
-                canal=Canal.web,
+                canal=Canal.whatsapp,
                 actor=ActorInteraccion.ciudadano,
                 timestamp=hace(30),
             ),

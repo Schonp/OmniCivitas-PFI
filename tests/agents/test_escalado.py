@@ -1,6 +1,26 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+from app.agents.escalado import mensaje_escalado
+from app.db.models import Canal
+
+
+def test_mensaje_escalado_por_voz_avisa_que_el_seguimiento_es_por_whatsapp():
+    """Todavía no hay operadores atendiendo por teléfono: una llamada
+    derivada no puede decir "por este mismo medio" como en WhatsApp/email."""
+    mensaje = mensaje_escalado("confianza_baja", "REC-ABC123", canal=Canal.voz)
+
+    assert "WhatsApp" in mensaje
+    assert "este mismo medio" not in mensaje
+
+
+def test_mensaje_escalado_por_whatsapp_mantiene_el_mismo_medio():
+    mensaje = mensaje_escalado("confianza_baja", "REC-ABC123", canal=Canal.whatsapp)
+
+    assert "este mismo medio" in mensaje
+    assert "WhatsApp" not in mensaje
+
+
 async def test_el_motivo_refleja_la_causa_real_no_siempre_confianza_baja(db_session, mocker):
     """La auditoría llegaba a decir "confianza_baja" junto a una confianza de 0.85.
     Este test existe porque el arreglo ya se perdió una vez sin que nadie lo note."""

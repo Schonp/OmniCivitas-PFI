@@ -29,13 +29,7 @@ async def obtener_ciudadano_por_canal(
 ) -> Ciudadano | None:
     if canal in (Canal.whatsapp, Canal.voz):
         return await obtener_ciudadano_por_telefono(db, identificador)
-    if canal == Canal.email:
-        return await obtener_ciudadano_por_email(db, identificador)
-    # Canal web: el identificador puede ser email o teléfono.
-    ciudadano = await obtener_ciudadano_por_email(db, identificador)
-    if ciudadano is None:
-        ciudadano = await obtener_ciudadano_por_telefono(db, identificador)
-    return ciudadano
+    return await obtener_ciudadano_por_email(db, identificador)
 
 
 async def buscar_conocimiento(

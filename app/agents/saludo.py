@@ -25,7 +25,7 @@ from app.agents.eleccion import armar_ofertas, numero_de_caso
 from app.agents.state import AgentState
 from app.db.crud.casos import listar_casos_activos_de_ciudadano
 from app.db.crud.interacciones import primeros_mensajes_de_casos
-from app.db.models import Caso
+from app.db.models import Canal, Caso
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,18 @@ CIERRE = (
 
 # Se conserva para los tests y para que el intake pueda descartarlo del historial.
 RESPUESTA_SALUDO = f"{PRESENTACION}\n\n{MENU}\n\n{CIERRE}"
+
+# Por voz no hay menú: un listado numerado que tiene sentido leído se vuelve
+# incómodo hablado, y las opciones de WhatsApp/email asumen que el ciudadano
+# puede volver a mirarlas, algo que no pasa en una llamada. En vez de eso se
+# abre la conversación con una pregunta abierta, más corta que el texto
+# escrito (ver DEVLOG.md de voz_asr_tts, "Diferenciar voz de texto").
+PRESENTACION_VOZ = (
+    "Hola, habla el asistente virtual de atención ciudadana del organismo. "
+    "Le responde una inteligencia artificial, no una persona."
+)
+PREGUNTA_ABIERTA_VOZ = "Cuénteme con sus palabras qué necesita."
+RESPUESTA_SALUDO_VOZ = f"{PRESENTACION_VOZ} {PREGUNTA_ABIERTA_VOZ}"
 
 
 # Un título largo tapa la referencia, que es lo que el ciudadano tiene que
@@ -94,7 +106,17 @@ def armar_saludo(
     casos_en_curso: list[Caso],
     primeros_mensajes: dict | None = None,
     ofertas: list[dict] | None = None,
+    canal: Canal | None = None,
 ) -> str:
+    if canal == Canal.voz:
+        if casos_en_curso:
+            return (
+                f"{PRESENTACION_VOZ} Veo que tiene un pedido en curso: si quiere "
+                "continuarlo cuéntemelo, o si prefiere empezar con algo nuevo, "
+                "también dígamelo."
+            )
+        return RESPUESTA_SALUDO_VOZ
+
     primeros_mensajes = primeros_mensajes or {}
     ofertas = ofertas or armar_ofertas(casos_en_curso)
     partes = [PRESENTACION, MENU]
@@ -125,7 +147,7 @@ async def nodo_saludo(state: AgentState, db: AsyncSession) -> dict:
 
     logger.debug("saludo: se responde sin abrir caso (%s en curso)", len(casos_en_curso))
     return {
-        "respuesta": armar_saludo(casos_en_curso, primeros, ofertas),
+        "respuesta": armar_saludo(casos_en_curso, primeros, ofertas, canal=Canal(state["canal"])),
         # Sin caso: un saludo no es una unidad de gestión. Si el ciudadano
         # después plantea algo concreto, ahí sí se abre.
         "caso_id": None,

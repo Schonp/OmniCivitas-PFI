@@ -49,12 +49,24 @@ CIERRE_ESCALADO = (
     "No hace falta que vuelva a escribir."
 )
 
+# Todavía no hay operadores atendiendo por teléfono: el seguimiento de una
+# llamada derivada no puede volver "por este mismo medio" como en WhatsApp o
+# email, porque no hay nadie para tomarlo ahí. Se avisa explícitamente que el
+# contacto va a ser por WhatsApp en vez de dejarlo implícito (ver DEVLOG.md de
+# voz_asr_tts, "Diferenciar voz de texto").
+CIERRE_ESCALADO_VOZ = (
+    "Lo van a contactar por WhatsApp dentro del horario de atención, "
+    "ya que por teléfono todavía no hay un equipo disponible para seguir esto."
+)
+
 # Se conserva el texto plano: el intake descarta el aviso de escalado del
 # historial para no releerlo como si fuera un pedido del ciudadano.
 RESPUESTA_ESCALADO = APERTURA_POR_DEFECTO + " " + CIERRE_ESCALADO
 
 
-def mensaje_escalado(motivo: str | None, referencia: str | None = None) -> str:
+def mensaje_escalado(
+    motivo: str | None, referencia: str | None = None, canal: Canal | None = None
+) -> str:
     """Arma el aviso explicando el porqué y dejando la referencia del caso.
 
     Sin la referencia el ciudadano no tiene con qué reclamar después.
@@ -62,7 +74,7 @@ def mensaje_escalado(motivo: str | None, referencia: str | None = None) -> str:
     partes = [MOTIVO_EN_CRIOLLO.get(motivo or "", APERTURA_POR_DEFECTO)]
     if referencia:
         partes.append(f"Su pedido quedó registrado con el número {referencia}.")
-    partes.append(CIERRE_ESCALADO)
+    partes.append(CIERRE_ESCALADO_VOZ if canal == Canal.voz else CIERRE_ESCALADO)
     return "\n\n".join(partes)
 
 SYSTEM_RESUMEN = """Resumí en 2 o 3 oraciones la solicitud del ciudadano para que un \
@@ -135,7 +147,7 @@ async def nodo_escalado(state: AgentState, db: AsyncSession) -> dict:
         return {
             "requiere_escalado": True,
             "motivo_escalado": motivo,
-            "respuesta": mensaje_escalado(motivo),
+            "respuesta": mensaje_escalado(motivo, canal=Canal(state["canal"])),
         }
 
     # El operador tiene que ver de qué se trata sin leer todo el hilo ni pedir
@@ -171,5 +183,5 @@ async def nodo_escalado(state: AgentState, db: AsyncSession) -> dict:
         "caso_id": str(caso.id),
         "requiere_escalado": True,
         "motivo_escalado": motivo,
-        "respuesta": mensaje_escalado(motivo, caso.referencia),
+        "respuesta": mensaje_escalado(motivo, caso.referencia, canal=Canal(state["canal"])),
     }
