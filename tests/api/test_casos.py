@@ -213,6 +213,109 @@ async def test_responder_caso_crea_interaccion_de_operador(
     assert respuestas and respuestas[0]["actor"] == usuario_admin.email
 
 
+async def _crear_caso_de_voz(client, auth_headers, ciudadano_id: str) -> dict:
+    respuesta = await client.post(
+        "/api/casos",
+        json={"ciudadano_id": ciudadano_id, "tipo": "reclamo", "canal_origen": "voz"},
+        headers=auth_headers,
+    )
+    return respuesta.json()
+
+
+async def test_la_respuesta_a_un_caso_de_voz_sale_por_whatsapp(
+    client, db_session, auth_headers, ciudadano, mocker
+):
+    """No hay operadores por teléfono: lo que escribe el operador le llega al
+    ciudadano por WhatsApp. La ventana de 24 h la abre un mensaje suyo por
+    WhatsApp, aunque sea de otro caso."""
+    from app.channels import salida
+    from app.db.crud.interacciones import crear_interaccion
+    from app.db.models import ActorInteraccion, Canal
+
+    enviar = mocker.patch.object(salida.whatsapp, "enviar_mensaje")
+    otro = await _crear_caso(client, auth_headers, str(ciudadano.id))
+    await crear_interaccion(
+        db_session,
+        caso_id=uuid.UUID(otro["id"]),
+        contenido="Hola, quería consultar algo",
+        canal=Canal.whatsapp,
+        actor=ActorInteraccion.ciudadano,
+    )
+    await db_session.commit()
+    caso = await _crear_caso_de_voz(client, auth_headers, str(ciudadano.id))
+
+    response = await client.post(
+        f"/api/casos/{caso['id']}/respuesta",
+        json={"contenido": "Ya derivamos su reclamo."},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["canal"] == "whatsapp"
+    enviar.assert_awaited_once_with(ciudadano.telefono, "Ya derivamos su reclamo.")
+
+    auditoria = await client.get(f"/api/casos/{caso['id']}/auditoria", headers=auth_headers)
+    envios = [e for e in auditoria.json() if e["accion"] == "envio_saliente"]
+    assert envios[0]["metadata"] == {"canal": "whatsapp", "transmitido": True}
+
+
+async def test_un_turno_de_llamada_no_abre_la_ventana_de_whatsapp(
+    client, db_session, auth_headers, ciudadano, mocker
+):
+    """Quien solo llamó nunca le escribió al número de WhatsApp: sin plantilla,
+    la respuesta no se intenta y el motivo queda en la auditoría."""
+    from app.channels import salida
+    from app.db.crud.interacciones import crear_interaccion
+    from app.db.models import ActorInteraccion, Canal
+
+    mocker.patch.object(salida.settings, "whatsapp_plantilla_seguimiento", "")
+    enviar = mocker.patch.object(salida.whatsapp, "enviar_mensaje")
+    caso = await _crear_caso_de_voz(client, auth_headers, str(ciudadano.id))
+    await crear_interaccion(
+        db_session,
+        caso_id=uuid.UUID(caso["id"]),
+        contenido="Se me cortó la luz en la cuadra",
+        canal=Canal.voz,
+        actor=ActorInteraccion.ciudadano,
+    )
+    await db_session.commit()
+
+    response = await client.post(
+        f"/api/casos/{caso['id']}/respuesta",
+        json={"contenido": "Ya derivamos su reclamo."},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    enviar.assert_not_called()
+    auditoria = await client.get(f"/api/casos/{caso['id']}/auditoria", headers=auth_headers)
+    envios = [e for e in auditoria.json() if e["accion"] == "envio_saliente"]
+    assert envios[0]["metadata"] == {
+        "canal": "whatsapp",
+        "transmitido": False,
+        "motivo": "fuera_de_ventana",
+    }
+
+
+async def test_una_nota_interna_de_un_caso_de_voz_queda_en_voz(
+    client, auth_headers, ciudadano, mocker
+):
+    from app.channels import salida
+
+    enviar = mocker.patch.object(salida.whatsapp, "enviar_mensaje")
+    caso = await _crear_caso_de_voz(client, auth_headers, str(ciudadano.id))
+
+    response = await client.post(
+        f"/api/casos/{caso['id']}/respuesta",
+        json={"contenido": "Llamar a la distribuidora", "interna": True},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["canal"] == "voz"
+    enviar.assert_not_called()
+
+
 async def test_responder_caso_cerrado_devuelve_422(client, auth_headers, ciudadano):
     caso = await _crear_caso(client, auth_headers, str(ciudadano.id))
     await client.patch(

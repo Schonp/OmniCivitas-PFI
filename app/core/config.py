@@ -10,9 +10,18 @@ class Settings(BaseSettings):
     database_url: str = ""
     test_database_url: str = ""
 
-    anthropic_api_key: str = ""
-    agente_modelo_intake: str = "claude-haiku-4-5-20251001"
-    agente_modelo_ejecutor: str = "claude-sonnet-5"
+    # El LLM corre local con Ollama (ver app/agents/llm.py). Los nombres son
+    # los que se le dio al modelo con `ollama create`.
+    ollama_url: str = "http://localhost:11434"
+    # La ventana del entrenamiento fue de 1024 tokens (una frase por ejemplo),
+    # pero en producción entran el prompt del sistema, el historial del caso y
+    # los esquemas de las herramientas. Qwen2.5 admite mucho más que esto.
+    ollama_num_ctx: int = 8192
+    # Cuánto queda el modelo cargado en la GPU después de la última consulta.
+    # Recargarlo tarda varios segundos, que en una llamada se notan.
+    ollama_keep_alive: str = "30m"
+    agente_modelo_intake: str = "omnicivitas-qwen"
+    agente_modelo_ejecutor: str = "omnicivitas-qwen"
     agente_umbral_confianza: float = 0.6
     # Minutos de silencio del agente sobre un caso que ya tiene una persona.
     # Recién pasado ese rato vuelve a acusar recibo: si el ciudadano insiste a
@@ -39,6 +48,11 @@ class Settings(BaseSettings):
     whatsapp_access_token: str = ""
     whatsapp_app_secret: str = ""
     whatsapp_verify_token: str = ""
+    # Plantilla aprobada por Meta para escribirle al ciudadano fuera de la
+    # ventana de 24 h (por ejemplo, el seguimiento de una llamada derivada).
+    # Vacía = fuera de la ventana no se envía y queda auditado.
+    whatsapp_plantilla_seguimiento: str = ""
+    whatsapp_plantilla_idioma: str = "es_AR"
 
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

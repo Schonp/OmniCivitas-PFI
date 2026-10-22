@@ -24,7 +24,7 @@ from app.db.crud.casos import (
 from app.db.crud.ciudadanos import obtener_ciudadano_por_id
 from app.db.crud.interacciones import (
     listar_interacciones_de_caso,
-    ultimo_mensaje_del_ciudadano,
+    ultimo_mensaje_por_whatsapp,
 )
 from app.db.crud.usuarios import obtener_usuario_por_id
 from app.db.models import ActorInteraccion, Caso, EstadoCaso, RolUsuario, Usuario
@@ -275,13 +275,23 @@ async def responder(
             detail="El caso está cerrado: reabralo antes de responder",
         )
 
+    # Una nota interna queda sobre el canal del caso. Una respuesta se registra
+    # sobre el canal por el que sale: la de un caso de voz va por WhatsApp.
+    canal_envio = (
+        caso.canal_actual if datos.interna else salida.canal_de_envio(caso.canal_actual)
+    )
     interaccion = await responder_caso(
-        db, caso, datos.contenido, actor=usuario_actual.email, interna=datos.interna
+        db,
+        caso,
+        datos.contenido,
+        actor=usuario_actual.email,
+        interna=datos.interna,
+        canal=canal_envio,
     )
 
-    # Una nota interna no sale del organismo. Una respuesta sí: se transmite por
-    # el canal actual del caso y el resultado queda auditado, para que el panel
-    # pueda mostrar si el ciudadano efectivamente la recibió.
+    # Una nota interna no sale del organismo. Una respuesta sí: se transmite y el
+    # resultado queda auditado, para que el panel pueda mostrar si el ciudadano
+    # efectivamente la recibió.
     if not datos.interna:
         ciudadano = await obtener_ciudadano_por_id(db, caso.ciudadano_id)
         resultado = await salida.enviar_al_ciudadano(
@@ -289,7 +299,7 @@ async def responder(
             ciudadano,
             datos.contenido,
             asunto=caso.asunto,
-            ultimo_entrante=await ultimo_mensaje_del_ciudadano(db, caso.id),
+            ultimo_entrante=await ultimo_mensaje_por_whatsapp(db, caso.ciudadano_id),
         )
         await registrar_auditoria(
             db,
@@ -297,7 +307,7 @@ async def responder(
             accion="envio_saliente",
             actor=usuario_actual.email,
             actor_tipo=ActorInteraccion.operador,
-            metadata={"canal": caso.canal_actual.value, **resultado.como_metadata()},
+            metadata={"canal": canal_envio.value, **resultado.como_metadata()},
         )
         await db.commit()
 

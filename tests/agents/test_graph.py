@@ -83,9 +83,9 @@ async def test_grafo_end_to_end_crea_reclamo(db_session, ciudadano, mocker):
         checkpointer=InMemorySaver(),
     )
 
-    assert final["respuesta"].endswith(
-        "Su reclamo fue registrado. Le informaremos las novedades."
-    )
+    # La confirmación sale de los datos reales del reclamo, no de una segunda
+    # vuelta del modelo (ver app/agents/confirmacion.py).
+    assert "Registré su reclamo por la vereda está rota." in final["respuesta"]
     assert final["requiere_escalado"] is False
 
     caso = await db_session.get(Caso, uuid.UUID(final["caso_id"]))

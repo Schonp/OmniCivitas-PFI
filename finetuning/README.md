@@ -25,6 +25,7 @@ python -m venv .venv
 .venv/Scripts/python.exe preparar_multi3nlu.py   # descarga y reetiqueta MULTI3NLU++ (es)
 .venv/Scripts/python.exe generar_ejemplos.py     # genera ejemplos de tool calling por plantilla
 .venv/Scripts/python.exe armar_dataset.py        # combina todo y arma los splits finales
+cd .. && python -m finetuning.armar_dataset_app # lo reescribe en el formato de la app (venv de la app)
 ```
 
 Salida en `data/` (gitignorado, se regenera con los scripts):

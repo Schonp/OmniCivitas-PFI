@@ -2,12 +2,15 @@ import json
 import logging
 import re
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool, tool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import llm
+from app.agents.confirmacion import agradecimiento, confirmacion, dia_en_palabras
 from app.agents.state import AgentState
 from app.db.models import ActorInteraccion, Canal
 from app.agents.eleccion import ETIQUETA_TIPO
@@ -18,6 +21,7 @@ from app.tools.reclamos import CategoriaReclamo
 logger = logging.getLogger(__name__)
 
 MAX_ITERACIONES = 3
+ZONA_HORARIA = ZoneInfo("America/Argentina/Buenos_Aires")
 MAX_FALLOS = 1
 
 SYSTEM_EJECUTOR = """Sos el agente de atención ciudadana de un organismo público \
@@ -30,6 +34,11 @@ Reglas:
   contestale con esa información y no llames a ninguna herramienta: informar
   requisitos, plazos y horarios es resolver la consulta.
 - Usá las herramientas para ejecutar acciones; no inventes números de caso ni estados.
+- Si el ciudadano ya dio los datos que pide la herramienta, llamala en ese mismo turno,
+  sin pedirle confirmación.
+- Si falta un dato necesario, no llames a la herramienta: preguntá justo lo que falta,
+  en una sola pregunta.
+- Nunca inventes un parámetro que el ciudadano no haya dicho.
 - Al informarle un número de caso al ciudadano usá siempre el campo `referencia`\n  que devuelve la herramienta (ej. REC-5072BFA2). Nunca le muestres `caso_id`.
 - Saludá al inicio de la conversación y, si sabés el nombre del ciudadano, usalo.
 - Al terminar, confirmá qué se hizo y cuál es el próximo paso.
@@ -107,9 +116,25 @@ def construir_tools(db: AsyncSession, state: AgentState) -> list[BaseTool]:
 
     @tool
     async def crear_reclamo(descripcion: str, categoria: CategoriaReclamo) -> dict:
-        """Crea un nuevo reclamo para el ciudadano. Usar cuando el ciudadano expresa
-        una queja o problema con un servicio público (ej. vereda rota, luminaria
-        quemada, falta de recolección)."""
+        """Crea un nuevo reclamo para el ciudadano. Usar cuando el ciudadano avisa de
+        un problema que el organismo tiene que atender.
+
+        `categoria`:
+        - "infraestructura": un daño en la vía pública. Árbol caído o seco, poste o
+          foco de luz quemado, pozo o bache, vereda rota, cable caído, semáforo que
+          no anda, caño roto, desagüe tapado, tapa de alcantarilla rota.
+        - "servicio": un servicio municipal que no se presta o se presta mal.
+          Recolección de basura, barrido, poda, desratización, ruidos molestos,
+          limpieza, mantenimiento de instalaciones municipales (caniles, playones
+          deportivos, mercados).
+        - "tramite": un problema administrativo. Pagos o tasas no reconocidos,
+          cobros duplicados, deudas o multas que no corresponden, trámites o
+          expedientes sin respuesta. No necesita dirección: registralo con lo que
+          contó el ciudadano.
+
+        Para "infraestructura" y "servicio" hace falta saber dónde es: una calle con
+        altura, una esquina o un lugar identificable (ej. "la plaza San Martín").
+        "Cerca de mi casa" o "en mi cuadra" no alcanzan: preguntá la dirección."""
         return await reclamos.crear_reclamo(
             db,
             ciudadano_id=ciudadano_id,
@@ -143,7 +168,8 @@ def construir_tools(db: AsyncSession, state: AgentState) -> list[BaseTool]:
 
         Si el ciudadano identificó de cuál se trata —el número de caso o unas
         palabras de qué era (ej. "el árbol caído", "la renovación del DNI")—,
-        pasalo en `referencia`. Si tiene más de un caso y no queda claro a cuál
+        pasalo en `referencia`. Si no dijo cuál ("¿cómo viene mi trámite?"),
+        llamala igual con `referencia` vacía: no le preguntes antes. Si tiene más de un caso y no queda claro a cuál
         se refiere, la herramienta devuelve `varios_posibles=true` con la lista:
         no elijas uno vos, preguntale al ciudadano cuál es antes de responder."""
         return await consultas.consultar_estado_caso(
@@ -189,37 +215,94 @@ def _texto(mensaje: AIMessage) -> str:
     return _sin_markdown("".join(partes))
 
 
-async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
-    tools = construir_tools(db, state)
-    tools_por_nombre = {t.name: t for t in tools}
-    modelo = llm.get_llm_ejecutor().bind_tools(tools)
+def prompt_del_sistema(
+    canal: Canal,
+    *,
+    conocimiento: list[str] | None = None,
+    origen_menu: str | None = None,
+    hoy: datetime | None = None,
+) -> str:
+    """El prompt del sistema del ejecutor, tal como lo ve el modelo.
 
-    contexto_extra = ""
-    if state.get("conocimiento"):
-        contexto_extra = (
+    Es la única fuente: lo usan el nodo, la medición del modelo local
+    (`scripts/evaluar_modelo_local.py`) y el armado del dataset de
+    fine-tuning (`finetuning/armar_dataset_app.py`), para que el modelo se
+    entrene y se mida con exactamente el texto que recibe en producción.
+    """
+    hoy = hoy or datetime.now(ZONA_HORARIA)
+    # Sin la fecha, "el jueves a las 10" no tiene cómo pasar a AAAA-MM-DD.
+    partes = [SYSTEM_EJECUTOR, f"\n\nHoy es {dia_en_palabras(hoy)} de {hoy.year}."]
+    partes.append(FORMATO_VOZ if canal == Canal.voz else FORMATO_TEXTO)
+    if conocimiento:
+        partes.append(
             "\n\nInformación del organismo (fuente oficial: usala para responder "
-            "consultas sobre requisitos, plazos y horarios):\n"
-            + "\n".join(state["conocimiento"])
+            "consultas sobre requisitos, plazos y horarios):\n" + "\n".join(conocimiento)
         )
-    if state.get("origen_menu"):
+    if origen_menu:
         # El mensaje que sigue es el número que tocó en el menú de inicio, no
         # una descripción: sin este aviso, el modelo ve un "1" o un "2" sueltos
         # y o los ignora (vuelve a saludar) o le pregunta al ciudadano qué quiso
         # decir con el número.
-        etiqueta = ETIQUETA_TIPO.get(state["origen_menu"], state["origen_menu"])
-        contexto_extra += (
+        etiqueta = ETIQUETA_TIPO.get(origen_menu, origen_menu)
+        partes.append(
             f'\n\nEl ciudadano acaba de elegir "{etiqueta}" en el menú de inicio '
             "(el mensaje que sigue es solo el número de esa opción, no una "
             "descripción). Todavía no contó de qué se trata: arrancá preguntándole "
             "eso, en una frase, sin repetirle el saludo ni el menú."
         )
+    return "".join(partes)
+
+
+DERIVAR = "derivar"
+
+
+def _cierre_sin_modelo(exitosas: list[tuple[dict, dict]], canal: Canal) -> str | None:
+    """Cómo termina el turno cuando las herramientas ya resolvieron todo.
+
+    Una derivación pasa directo al escalado: la respuesta del modelo después de
+    `derivar_a_operador` se descartaba igual. Un reclamo o una reserva creados
+    se confirman con los datos reales (ver `app/agents/confirmacion.py`). Si
+    hubo una consulta de estado, la respuesta la sigue redactando el modelo,
+    porque depende de lo que encontró.
+    """
+    nombres = [llamada["name"] for llamada, _ in exitosas]
+    if "derivar_a_operador" in nombres:
+        return DERIVAR
+    if "consultar_estado_caso" in nombres:
+        return None
+    confirmaciones = [
+        texto
+        for llamada, salida in exitosas
+        if (texto := confirmacion(llamada["name"], llamada["args"], salida, canal))
+    ]
+    if not confirmaciones:
+        return None
+    identidad = next(
+        (salida for llamada, salida in exitosas if llamada["name"] == "registrar_identidad"),
+        None,
+    )
+    prefijo = agradecimiento(identidad) if identidad else ""
+    return prefijo + "\n\n".join(confirmaciones)
+
+
+async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
+    tools = construir_tools(db, state)
+    tools_por_nombre = {t.name: t for t in tools}
+    modelo = llm.get_llm_ejecutor().bind_tools(tools)
 
     # El historial del caso entra como turnos previos de la conversación. Sin
     # esto el ejecutor solo ve el mensaje actual y le vuelve a preguntar al
     # ciudadano algo que ya dijo antes, que es justamente lo que el proyecto
     # busca evitar. El nodo de contexto ya lo trae sin las notas internas.
-    formato = FORMATO_VOZ if Canal(state["canal"]) == Canal.voz else FORMATO_TEXTO
-    mensajes: list = [SystemMessage(content=SYSTEM_EJECUTOR + formato + contexto_extra)]
+    mensajes: list = [
+        SystemMessage(
+            content=prompt_del_sistema(
+                Canal(state["canal"]),
+                conocimiento=state.get("conocimiento"),
+                origen_menu=state.get("origen_menu"),
+            )
+        )
+    ]
     for entrada in state.get("historial") or []:
         contenido = entrada.get("contenido") or ""
         if not contenido:
@@ -254,12 +337,17 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
             }
 
         mensajes.append(respuesta_llm)
+        exitosas: list[tuple[dict, dict]] = []
+        hubo_fallo = False
         for tool_call in respuesta_llm.tool_calls:
-            herramienta = tools_por_nombre[tool_call["name"]]
+            herramienta = tools_por_nombre.get(tool_call["name"])
             try:
+                if herramienta is None:
+                    raise ValueError(f"herramienta no ofrecida: {tool_call['name']}")
                 salida = await herramienta.ainvoke(tool_call["args"])
             except Exception:
                 logger.exception("ejecutor: fallo la tool %s", tool_call["name"])
+                hubo_fallo = True
                 fallos += 1
                 if fallos > MAX_FALLOS:
                     return {
@@ -269,6 +357,8 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
                         "motivo_escalado": "fallo_ejecucion",
                     }
                 salida = {"error": "La acción falló, intente de otra forma."}
+            else:
+                exitosas.append((tool_call, salida if isinstance(salida, dict) else {}))
 
             if isinstance(salida, dict):
                 resultado_ejecucion[tool_call["name"]] = salida
@@ -279,6 +369,24 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
                     tool_call_id=tool_call["id"],
                 )
             )
+
+        if hubo_fallo:
+            # El modelo ve el error y decide: corregir el dato, preguntar o derivar.
+            continue
+        cierre = _cierre_sin_modelo(exitosas, Canal(state["canal"]))
+        if cierre == DERIVAR:
+            return {
+                "resultado_ejecucion": resultado_ejecucion,
+                "caso_id": caso_id,
+                "requiere_escalado": True,
+                "motivo_escalado": "sin_herramienta",
+            }
+        if cierre:
+            return {
+                "resultado_ejecucion": resultado_ejecucion,
+                "caso_id": caso_id,
+                "respuesta": cierre,
+            }
 
     return {
         "resultado_ejecucion": resultado_ejecucion or None,

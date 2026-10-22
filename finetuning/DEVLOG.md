@@ -601,3 +601,156 @@ documentado en vez de inventar una explicación:**
 - [ ] Integración en `app/agents/llm.py` para apuntar a Ollama vía el
       endpoint compatible con OpenAI, con el `.gguf` ya exportado (sin
       empezar).
+
+---
+
+## 2026-10-21 — Integración con Ollama: el grafo pasa a usar solo el modelo local
+
+`app/agents/llm.py` deja `ChatAnthropic` y pasa a `ChatOllama` contra
+`omnicivitas-qwen`, para los dos roles (intake y ejecutor) y por lo tanto para
+todo lo que los usa (resumen, mensajes de escalado, agrupador de reclamos). Se
+sacó `langchain-anthropic` de `requirements.txt` y `ANTHROPIC_API_KEY` de la
+configuración: no queda ningún LLM comercial, ni como respaldo.
+
+- `ollama/Modelfile`: plantilla ChatML de Qwen2.5 **con soporte de
+  herramientas**. La que genera Unsloth junto al GGUF no declara `.Tools`, y
+  sin eso Ollama rechaza los pedidos con `bind_tools`.
+- `num_ctx` 8192: el entrenamiento usó 1024 (una frase por ejemplo), pero en
+  producción entran el prompt del sistema, el historial y los esquemas de las
+  herramientas.
+
+### Desajuste a medir: el formato del entrenamiento no es el de la app
+
+El modelo se entrenó para devolver un único JSON (`intencion`, `confianza`,
+`llamada_herramienta`, `respuesta`) con un prompt fijo y un solo turno. La app
+lo usa en dos llamadas: el intake con salida estructurada
+(`ClasificacionIntent`, que además tiene `saludo`, `continua_caso_abierto` y
+`requiere_humano`) y el ejecutor con tool calling nativo, hasta cinco
+herramientas e historial. El 92,5% medido en Colab no se traslada solo.
+
+`scripts/evaluar_modelo_local.py` mide las dos cosas sobre
+`prueba_tool_calling.jsonl`: `--modo entrenamiento` (confirma que el GGUF
+servido rinde como en Colab) y `--modo app` (el número que importa). También
+reporta tool calling sin comparar campos de texto libre, que era la corrección
+pendiente de la métrica. Si el camino de la app rinde claramente peor, la
+alternativa es un adaptador que llame al modelo con su prompt de entrenamiento
+y traduzca el JSON al estado del grafo.
+
+### Qué queda
+
+- [x] Instalar Ollama, bajar el `.gguf` de Drive y `ollama create` (pasos en
+      `ollama/README.md`).
+- [x] Correr las dos mediciones y anotar acá los resultados (entrada siguiente).
+
+---
+
+## 2026-10-21 — Mediciones con Ollama, parser propio de herramientas y segunda versión del dataset
+
+### El GGUF servido rinde lo mismo que en Colab
+
+`scripts/evaluar_modelo_local.py --modo entrenamiento`, sobre las 67 de
+`prueba_tool_calling.jsonl`, con el modelo servido por Ollama en una RTX 3050
+(3,3 s por ejemplo):
+
+| Indicador | Colab | Ollama |
+|---|---|---|
+| Exactitud de intención | 100% | 100% (67/67) |
+| Falsos positivos | 0 | 0 |
+| Tool calling exacto | 92,5% | 91,0% (61/67) |
+| Tool calling sin campos de texto libre | — | 95,5% (64/67) |
+
+La conversión a GGUF q4_k_m no le hizo perder nada relevante.
+
+### Por el camino de la app: un bug de Ollama y después el desajuste real
+
+La primera medición por el camino de la app dio 43,3% de tool calling. En 26
+casos el modelo había generado la llamada correcta y Ollama (0.40.7, runner de
+llama.cpp) devolvía la respuesta vacía: con la plantilla Go del `Modelfile` su
+parser se traga el texto, y con la plantilla Jinja embebida en el GGUF rechaza
+las herramientas ("tools param requires --jinja flag"). Se verificó generando
+en crudo (`/api/generate` con `raw`): el texto era una llamada perfecta.
+
+Arreglo: el protocolo de herramientas se resuelve en `app/agents/llm.py`
+(`ChatQwenLocal`). Las herramientas se escriben en el prompt del sistema con el
+formato exacto de la plantilla de Qwen2.5 y los bloques `<tool_call>` se leen
+del texto. Acepta además el JSON del primer fine-tuning y argumentos sueltos
+sin envoltorio. Ya no depende de la versión de Ollama.
+
+Con eso, por el camino de la app: intención 100%, falsos positivos 0, tool
+calling 65,7% exacto y 76,1% sin texto libre. De los 16 fallos, 10 eran
+reclamos que no llamó (sobre todo de categoría `tramite`: pedía una dirección
+que ese tipo de reclamo no necesita), 5 eran `servicio` contra
+`infraestructura` y 1 una consulta de estado sin referencia.
+
+### Palanca 1: cambios en la app, sin reentrenar
+
+- **Confirmaciones armadas por código** (`app/agents/confirmacion.py`). Después
+  de un reclamo o una reserva creados, el ejecutor ya no vuelve a llamar al
+  modelo: la confirmación sale de los datos reales de la herramienta. El modelo
+  nunca vio un resultado de herramienta en el entrenamiento y en esa segunda
+  vuelta inventaba ("ya quedó derivado", "le van a pedir el comprobante").
+  Además ahorra una inferencia entera por gestión, que en una llamada se nota.
+  `derivar_a_operador` también corta directo al escalado.
+- **Criterios de categoría en la descripción de `crear_reclamo`**, los mismos
+  con los que se etiquetó el dataset, y la aclaración de que un reclamo de
+  `tramite` no necesita dirección.
+- **Reglas del prompt alineadas con las del entrenamiento** ("llamá la
+  herramienta en ese turno si ya tenés los datos", "nunca inventes un
+  parámetro").
+- **La fecha de hoy en el prompt del ejecutor.** Sin ella "el jueves a las 10"
+  no tiene cómo pasar a AAAA-MM-DD; el dataset tenía el año 2026 fijo. El
+  prompt se arma ahora en un solo lugar (`prompt_del_sistema`), que usan el
+  nodo, la medición y el dataset.
+
+Resultado: sin mejora en la primera llamada (61,2% exacto y 74,6% sin texto
+libre con los criterios y las reglas; 58,2% y 70,1% sumando la fecha y las
+descripciones sin sangría). Los fallos se movieron más de lo que bajaron: aparecieron llamadas a
+`consultar_estado_caso`, e incluso a un nombre inventado
+(`consulta_estado_caso`), ante reclamos nuevos. Con un modelo que no vio este
+formato, retocar el prompt reacomoda los errores en vez de eliminarlos. Las
+confirmaciones por código sí resuelven el problema que atacan, pero esta
+métrica mide solo la primera llamada y no lo refleja.
+
+### Palanca 2: segunda versión del dataset, en el formato de la app
+
+`armar_dataset_app.py` reescribe el dataset como conversaciones idénticas a las
+que arma la app. No copia los prompts: importa `SYSTEM_INTAKE`,
+`prompt_del_sistema` y `construir_tools` de `app/` y renderiza con
+`a_formato_qwen`, la misma función que usa la inferencia. Si un prompt cambia,
+el dataset cambia con él.
+
+- **intake** (2024 en train): MASSIVE y MULTI3NLU++ submuestreados a 1600
+  repartidos por intención (eran 13 mil y solo enseñan intención), los
+  manuales, saludos, pedidos de hablar con una persona y mensajes con
+  historial (aportar el dato pedido continúa el caso; un tema nuevo no).
+- **ejecutor** (680 en train): los manuales convertidos y lo que el primer
+  dataset no tenía. Reclamos y reservas en dos turnos (pide el dato, recién
+  después llama), respuestas a partir del resultado de `consultar_estado_caso`
+  (un caso, varios, ninguno), `registrar_identidad` (solo, junto con un
+  reclamo, o como respuesta al pedido de datos), `derivar_a_operador` para
+  trámites y pedidos de una persona, y las elecciones del menú de inicio. Las
+  reservas nuevas calculan las fechas desde una fecha de hoy al azar, que va en
+  el prompt: el primer dataset tenía días de la semana que no coincidían con el
+  calendario ("el lunes 3 de noviembre" de 2026 es martes).
+- Las consultas informativas llevan el dato en "Información del organismo",
+  como en producción, para no entrenar al modelo a contestar requisitos de
+  memoria.
+- Las confirmaciones de reclamos y reservas no se entrenan: las arma el código.
+
+Unas 2,6 millones de tokens por época. El notebook
+`finetuning_qwen_app_colab.ipynb` entrena 2 épocas en vez de 3 (con 3 se
+pasaría del límite de la GPU gratuita) con `MAX_SEQ_LENGTH` 2560, guarda en
+carpetas nuevas de Drive (`qwen_omnicivitas_app_*`) y mide tool calling sobre
+`app_prueba.jsonl`, el mismo conjunto de prueba con el prompt real.
+
+### Qué queda
+
+- [ ] Commit y push (el notebook clona el repo desde GitHub).
+- [ ] Correr `finetuning_qwen_app_colab.ipynb` en Colab (estimado 2,5 a 3 h).
+- [ ] Servir el GGUF nuevo con Ollama y medir con
+      `scripts/evaluar_modelo_local.py`; anotar acá la comparación.
+- [ ] `INSTRUCCION_IDENTIFICACION` (`app/agents/ejecutor.py`) está definida
+      desde la fase de WhatsApp/email pero ningún código la usa: decidir si se
+      agrega al prompt de quien no está identificado o se borra. El dataset
+      copia el comportamiento actual (sin la instrucción).
+

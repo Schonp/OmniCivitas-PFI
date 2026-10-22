@@ -18,12 +18,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.channels import email as canal_email
 from app.channels import whatsapp
+from app.core.config import settings
 from app.db.crud.auditoria import registrar_auditoria
 from app.db.models import ActorInteraccion, Canal, Ciudadano
 
 logger = logging.getLogger(__name__)
 
 ACTOR_AGENTE = "agente_ia"
+
+
+def canal_de_envio(canal: Canal) -> Canal:
+    """Por dónde sale una respuesta escrita para un caso de ese canal.
+
+    No hay operadores atendiendo por teléfono: un caso que llegó por voz se
+    sigue por WhatsApp, al mismo número desde el que llamó el ciudadano, como
+    le anticipa el aviso de derivación de la llamada.
+    """
+    return Canal.whatsapp if canal == Canal.voz else canal
 
 
 def dentro_de_ventana(ultimo_entrante: datetime | None) -> bool:
@@ -54,11 +65,14 @@ def _asunto_respuesta(asunto: str | None) -> str:
 class ResultadoEnvio:
     transmitido: bool
     motivo: str | None = None
+    via_plantilla: bool = False
 
     def como_metadata(self) -> dict:
         datos: dict = {"transmitido": self.transmitido}
         if self.motivo:
             datos["motivo"] = self.motivo
+        if self.via_plantilla:
+            datos["plantilla"] = True
         return datos
 
 
@@ -70,21 +84,31 @@ async def enviar_al_ciudadano(
     asunto: str | None = None,
     ultimo_entrante: datetime | None = None,
 ) -> ResultadoEnvio:
-    """Transmite el texto al ciudadano por el canal indicado.
+    """Transmite el texto al ciudadano por el canal de envío del caso.
 
     `asunto` es el del correo con el que se abrió el caso: se responde sobre él
     para que al ciudadano le quede en el mismo hilo y no como mensaje suelto.
+    `ultimo_entrante` es el último mensaje que el ciudadano mandó por WhatsApp,
+    que define si la ventana de 24 h está abierta.
+
+    Fuera de la ventana, el texto sale dentro de la plantilla de seguimiento si
+    hay una configurada; es el caso típico de quien solo llamó por teléfono y
+    nunca escribió por WhatsApp.
     """
     if not texto.strip():
         return ResultadoEnvio(False, "texto_vacio")
 
-    if canal == Canal.voz:
-        # La llamada no admite texto asincrónico: queda para la fase de voz.
-        return ResultadoEnvio(False, "canal_no_implementado")
+    canal = canal_de_envio(canal)
 
+    via_plantilla = False
     if canal == Canal.whatsapp and not dentro_de_ventana(ultimo_entrante):
-        logger.warning("envio saliente: la ventana de 24 h de WhatsApp está cerrada")
-        return ResultadoEnvio(False, "fuera_de_ventana")
+        if not settings.whatsapp_plantilla_seguimiento:
+            logger.warning("envio saliente: la ventana de 24 h de WhatsApp está cerrada")
+            return ResultadoEnvio(False, "fuera_de_ventana")
+        if len(whatsapp.parametro_de_plantilla(texto)) > whatsapp.MAX_PARAMETRO_PLANTILLA:
+            logger.warning("envio saliente: la respuesta no entra en la plantilla de WhatsApp")
+            return ResultadoEnvio(False, "texto_largo_para_plantilla")
+        via_plantilla = True
 
     destino = ciudadano.email if canal == Canal.email else ciudadano.telefono
     if not destino:
@@ -96,6 +120,8 @@ async def enviar_al_ciudadano(
             await canal_email.enviar_mensaje(
                 destino, texto, _asunto_respuesta(asunto)
             )
+        elif via_plantilla:
+            await whatsapp.enviar_plantilla(destino, texto)
         else:
             await whatsapp.enviar_mensaje(destino, texto)
     except Exception as error:
@@ -103,7 +129,7 @@ async def enviar_al_ciudadano(
         return ResultadoEnvio(False, type(error).__name__)
 
     logger.info("envio saliente: respuesta del operador transmitida por %s", canal.value)
-    return ResultadoEnvio(True)
+    return ResultadoEnvio(True, via_plantilla=via_plantilla)
 
 
 async def responder_al_ciudadano(

@@ -14,8 +14,9 @@ procesamiento de las interacciones ciudadanas.
 **Ventana de 24 horas.** WhatsApp solo admite mensajes libres dentro de las 24
 horas posteriores al último mensaje del ciudadano; fuera de esa ventana hay que
 usar una plantilla aprobada por Meta. Es una regla de la plataforma, no del
-proveedor. `salida.enviar_al_ciudadano` no intenta el envío si la ventana está
-cerrada, para que el operador se entere en vez de que el mensaje se pierda.
+proveedor. `salida.enviar_al_ciudadano` usa la plantilla de seguimiento si hay
+una configurada, y si no, no intenta el envío, para que el operador se entere
+por la auditoría en vez de que el mensaje se pierda.
 """
 
 import hashlib
@@ -44,6 +45,9 @@ NOMBRE_POR_DEFECTO = "Ciudadano sin identificar"
 API_BASE = "https://graph.facebook.com"
 TIMEOUT = 20.0
 VENTANA_HORAS = 24
+# Meta limita el cuerpo de una plantilla a 1024 caracteres contando el texto
+# fijo; con este margen entra la respuesta del operador junto al encabezado.
+MAX_PARAMETRO_PLANTILLA = 900
 
 
 @dataclass(frozen=True)
@@ -189,10 +193,62 @@ def destino_para_meta(telefono: str) -> str:
     return numero
 
 
+def parametro_de_plantilla(texto: str) -> str:
+    """Meta rechaza los parámetros de plantilla con saltos de línea, tabulaciones
+    o más de cuatro espacios seguidos, así que el texto del operador se pasa a
+    una sola línea antes de enviarlo."""
+    return " ".join(texto.split())
+
+
 async def enviar_mensaje(telefono: str, texto: str) -> str | None:
     """Envía la respuesta por WhatsApp. Devuelve el id del mensaje en Meta."""
     if not texto.strip():
         return None
+    return await _postear(
+        {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": destino_para_meta(telefono),
+            "type": "text",
+            "text": {"preview_url": False, "body": texto},
+        }
+    )
+
+
+async def enviar_plantilla(telefono: str, texto: str) -> str | None:
+    """Envía el texto dentro de la plantilla de seguimiento aprobada por Meta.
+
+    Es la única forma de escribirle a un ciudadano fuera de la ventana de 24
+    horas, por ejemplo a quien solo llamó por teléfono y nunca escribió por
+    WhatsApp. La plantilla tiene que tener exactamente un parámetro en el cuerpo
+    (`{{1}}`), donde va el texto del operador.
+    """
+    parametro = parametro_de_plantilla(texto)
+    if not parametro:
+        return None
+    if not settings.whatsapp_plantilla_seguimiento:
+        raise RuntimeError(
+            "Falta la plantilla de seguimiento: definir WHATSAPP_PLANTILLA_SEGUIMIENTO"
+        )
+    return await _postear(
+        {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": destino_para_meta(telefono),
+            "type": "template",
+            "template": {
+                "name": settings.whatsapp_plantilla_seguimiento,
+                "language": {"code": settings.whatsapp_plantilla_idioma},
+                "components": [
+                    {"type": "body", "parameters": [{"type": "text", "text": parametro}]}
+                ],
+            },
+        }
+    )
+
+
+async def _postear(cuerpo: dict) -> str | None:
+    """Manda el mensaje a la API de Meta. Devuelve el id del mensaje enviado."""
     if not settings.whatsapp_phone_number_id or not settings.whatsapp_access_token:
         raise RuntimeError(
             "Faltan credenciales de WhatsApp: definir WHATSAPP_PHONE_NUMBER_ID "
@@ -203,13 +259,6 @@ async def enviar_mensaje(telefono: str, texto: str) -> str | None:
         f"{API_BASE}/{settings.whatsapp_api_version}"
         f"/{settings.whatsapp_phone_number_id}/messages"
     )
-    cuerpo = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": destino_para_meta(telefono),
-        "type": "text",
-        "text": {"preview_url": False, "body": texto},
-    }
 
     async with httpx.AsyncClient(timeout=TIMEOUT) as cliente:
         respuesta = await cliente.post(

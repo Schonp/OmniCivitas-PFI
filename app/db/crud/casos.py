@@ -9,6 +9,7 @@ from app.db.crud.auditoria import registrar_auditoria
 from app.db.crud.interacciones import crear_interaccion
 from app.db.models import (
     ActorInteraccion,
+    Canal,
     Caso,
     Ciudadano,
     EstadoCaso,
@@ -341,19 +342,27 @@ async def actualizar_resumen_caso(
 
 
 async def responder_caso(
-    db: AsyncSession, caso: Caso, contenido: str, *, actor: str, interna: bool = False
+    db: AsyncSession,
+    caso: Caso,
+    contenido: str,
+    *,
+    actor: str,
+    interna: bool = False,
+    canal: Canal | None = None,
 ) -> Interaccion:
     """Registra la respuesta del operador como una interacción más del caso.
 
-    Se guarda sobre el canal actual del caso: el ciudadano la ve al consultar su
-    conversación. El envío saliente por WhatsApp/email llega con esos canales.
+    Se guarda sobre `canal`, que por defecto es el canal actual del caso. El
+    endpoint pasa el canal por el que la respuesta sale de verdad: la de un caso
+    de voz se manda por WhatsApp, y así tiene que quedar en la conversación.
     Con `interna=True` es una nota que solo ve el organismo.
     """
+    canal = canal or caso.canal_actual
     interaccion = await crear_interaccion(
         db,
         caso_id=caso.id,
         contenido=contenido,
-        canal=caso.canal_actual,
+        canal=canal,
         actor=ActorInteraccion.operador,
         interna=interna,
     )
@@ -364,7 +373,7 @@ async def responder_caso(
         accion="nota_interna" if interna else "respuesta_operador",
         actor=actor,
         actor_tipo=ActorInteraccion.operador,
-        metadata={"canal": caso.canal_actual.value},
+        metadata={"canal": canal.value},
     )
 
     await db.commit()

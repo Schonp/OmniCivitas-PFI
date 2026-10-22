@@ -24,6 +24,8 @@ services:
       # (localhost): dentro de la red de Compose, los servicios se resuelven
       # por nombre.
       DATABASE_URL: postgresql+asyncpg://omnicivitas:omnicivitas@db:5432/omnicivitas
+      # Ollama corre en el host (usa la GPU de la máquina), no en Compose.
+      OLLAMA_URL: http://host.docker.internal:11434
     ports:
       - "8000:8000"
     depends_on:

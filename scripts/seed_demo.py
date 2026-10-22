@@ -1,7 +1,7 @@
 """Carga datos de demostración para el panel de operador.
 
 Genera casos, interacciones y auditoría sin llamar al LLM, para poder tomar
-capturas del panel aunque no haya ANTHROPIC_API_KEY configurada.
+capturas del panel aunque Ollama no esté corriendo.
 
 Uso:  python -m scripts.seed_demo
 """

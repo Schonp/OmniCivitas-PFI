@@ -9,3 +9,5 @@ dist/
 build/
 .pytest_cache/
 .claude/settings.local.json
+# Modelo local (ver ollama/README.md): pesa casi 2 GB, se baja de Drive.
+*.gguf

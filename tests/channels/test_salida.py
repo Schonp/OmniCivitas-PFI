@@ -140,6 +140,7 @@ async def test_fuera_de_ventana_no_se_intenta_el_envio_por_whatsapp(mocker):
     auditoría, en vez de que el vecino nunca reciba nada y nadie se entere."""
     from datetime import datetime, timedelta, timezone
 
+    mocker.patch.object(salida.settings, "whatsapp_plantilla_seguimiento", "")
     enviar = mocker.patch.object(salida.whatsapp, "enviar_mensaje")
 
     resultado = await salida.enviar_al_ciudadano(
@@ -150,6 +151,90 @@ async def test_fuera_de_ventana_no_se_intenta_el_envio_por_whatsapp(mocker):
     )
 
     assert resultado.transmitido is False
+    assert resultado.motivo == "fuera_de_ventana"
+    enviar.assert_not_called()
+
+
+async def test_fuera_de_ventana_sale_la_plantilla_si_hay_una(mocker):
+    from datetime import datetime, timedelta, timezone
+
+    mocker.patch.object(salida.settings, "whatsapp_plantilla_seguimiento", "seguimiento_caso")
+    libre = mocker.patch.object(salida.whatsapp, "enviar_mensaje")
+    plantilla = mocker.patch.object(salida.whatsapp, "enviar_plantilla")
+
+    resultado = await salida.enviar_al_ciudadano(
+        Canal.whatsapp,
+        CIUDADANO,
+        "Ya derivamos su reclamo.",
+        ultimo_entrante=datetime.now(timezone.utc) - timedelta(hours=30),
+    )
+
+    assert resultado.transmitido is True
+    assert resultado.como_metadata() == {"transmitido": True, "plantilla": True}
+    plantilla.assert_awaited_once_with("+5491133334444", "Ya derivamos su reclamo.")
+    libre.assert_not_called()
+
+
+async def test_un_texto_que_no_entra_en_la_plantilla_no_se_envia(mocker):
+    mocker.patch.object(salida.settings, "whatsapp_plantilla_seguimiento", "seguimiento_caso")
+    plantilla = mocker.patch.object(salida.whatsapp, "enviar_plantilla")
+    largo = "a" * (salida.whatsapp.MAX_PARAMETRO_PLANTILLA + 1)
+
+    resultado = await salida.enviar_al_ciudadano(Canal.whatsapp, CIUDADANO, largo)
+
+    assert resultado.transmitido is False
+    assert resultado.motivo == "texto_largo_para_plantilla"
+    plantilla.assert_not_called()
+
+
+# --- Casos que llegaron por voz ---------------------------------------------
+
+
+def test_la_respuesta_escrita_de_un_caso_de_voz_sale_por_whatsapp():
+    assert salida.canal_de_envio(Canal.voz) == Canal.whatsapp
+    assert salida.canal_de_envio(Canal.whatsapp) == Canal.whatsapp
+    assert salida.canal_de_envio(Canal.email) == Canal.email
+
+
+async def test_caso_de_voz_dentro_de_ventana_sale_como_mensaje_libre(mocker):
+    """No hay operadores por teléfono: la respuesta va por WhatsApp al número
+    desde el que llamó el ciudadano."""
+    from datetime import datetime, timedelta, timezone
+
+    enviar = mocker.patch.object(salida.whatsapp, "enviar_mensaje")
+
+    resultado = await salida.enviar_al_ciudadano(
+        Canal.voz,
+        CIUDADANO,
+        "Ya derivamos su reclamo.",
+        ultimo_entrante=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+
+    assert resultado.transmitido is True
+    enviar.assert_awaited_once_with("+5491133334444", "Ya derivamos su reclamo.")
+
+
+async def test_caso_de_voz_de_quien_nunca_escribio_usa_la_plantilla(mocker):
+    mocker.patch.object(salida.settings, "whatsapp_plantilla_seguimiento", "seguimiento_caso")
+    plantilla = mocker.patch.object(salida.whatsapp, "enviar_plantilla")
+
+    resultado = await salida.enviar_al_ciudadano(
+        Canal.voz, CIUDADANO, "Ya derivamos su reclamo.", ultimo_entrante=None
+    )
+
+    assert resultado.transmitido is True
+    assert resultado.via_plantilla is True
+    plantilla.assert_awaited_once_with("+5491133334444", "Ya derivamos su reclamo.")
+
+
+async def test_caso_de_voz_sin_plantilla_queda_fuera_de_ventana(mocker):
+    mocker.patch.object(salida.settings, "whatsapp_plantilla_seguimiento", "")
+    enviar = mocker.patch.object(salida.whatsapp, "enviar_mensaje")
+
+    resultado = await salida.enviar_al_ciudadano(
+        Canal.voz, CIUDADANO, "Ya derivamos su reclamo.", ultimo_entrante=None
+    )
+
     assert resultado.motivo == "fuera_de_ventana"
     enviar.assert_not_called()
 

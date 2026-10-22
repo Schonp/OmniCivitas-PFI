@@ -249,6 +249,61 @@ async def test_enviar_mensaje_exige_credenciales(mocker):
         await whatsapp.enviar_mensaje(TELEFONO, "hola")
 
 
+async def test_enviar_plantilla_postea_el_texto_como_parametro(mocker):
+    mocker.patch.object(whatsapp.settings, "whatsapp_phone_number_id", "123456")
+    mocker.patch.object(whatsapp.settings, "whatsapp_access_token", "token-secreto")
+    mocker.patch.object(whatsapp.settings, "whatsapp_plantilla_seguimiento", "seguimiento_caso")
+    mocker.patch.object(whatsapp.settings, "whatsapp_plantilla_idioma", "es_AR")
+
+    capturado = {}
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        capturado["body"] = request.content
+        return httpx.Response(200, json={"messages": [{"id": "wamid.PLANTILLA"}]})
+
+    transporte = httpx.MockTransport(responder)
+    original = httpx.AsyncClient
+
+    def cliente(*args, **kwargs):
+        kwargs["transport"] = transporte
+        return original(*args, **kwargs)
+
+    mocker.patch.object(whatsapp.httpx, "AsyncClient", cliente)
+
+    identificador = await whatsapp.enviar_plantilla(
+        TELEFONO, "Su reclamo quedó registrado.\n\nLo contactamos."
+    )
+
+    assert identificador == "wamid.PLANTILLA"
+    enviado = json.loads(capturado["body"])
+    assert enviado["to"] == "541133334444"
+    assert enviado["type"] == "template"
+    assert enviado["template"]["name"] == "seguimiento_caso"
+    assert enviado["template"]["language"] == {"code": "es_AR"}
+    # Meta rechaza parámetros con saltos de línea: el texto va en una sola línea.
+    assert enviado["template"]["components"] == [
+        {
+            "type": "body",
+            "parameters": [
+                {"type": "text", "text": "Su reclamo quedó registrado. Lo contactamos."}
+            ],
+        }
+    ]
+
+
+async def test_enviar_plantilla_exige_una_plantilla_configurada(mocker):
+    mocker.patch.object(whatsapp.settings, "whatsapp_plantilla_seguimiento", "")
+
+    with pytest.raises(RuntimeError, match="plantilla"):
+        await whatsapp.enviar_plantilla(TELEFONO, "hola")
+
+
+def test_parametro_de_plantilla_colapsa_espacios_y_saltos():
+    assert whatsapp.parametro_de_plantilla("  Hola\n\tvecina,     ya   está. ") == (
+        "Hola vecina, ya está."
+    )
+
+
 @pytest.mark.parametrize(
     "entrada,esperado",
     [

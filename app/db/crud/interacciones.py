@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import ActorInteraccion, Canal, Interaccion
+from app.db.models import ActorInteraccion, Canal, Caso, Interaccion
 
 # Un "1" o un "2" sueltos son la respuesta a un menú (ver `app/agents/eleccion.py`),
 # no lo que el ciudadano vino a decir. No se importa ese módulo desde acá —esta
@@ -50,19 +50,24 @@ async def listar_interacciones_de_caso(
     return list(reversed(resultado.scalars().all()))
 
 
-async def ultimo_mensaje_del_ciudadano(
-    db: AsyncSession, caso_id: uuid.UUID
+async def ultimo_mensaje_por_whatsapp(
+    db: AsyncSession, ciudadano_id: uuid.UUID
 ) -> datetime | None:
-    """Momento del último mensaje que escribió el ciudadano en el caso.
+    """Momento del último mensaje que el ciudadano mandó por WhatsApp.
 
     Lo necesita el envío saliente por WhatsApp: la plataforma solo admite
-    mensajes libres dentro de las 24 horas siguientes a ese momento.
+    mensajes libres dentro de las 24 horas siguientes a ese momento. Se mira
+    cualquier caso del ciudadano y solo sus mensajes por WhatsApp, porque la
+    ventana es de la conversación con ese número, no del caso: un turno de una
+    llamada no la abre, y un mensaje de WhatsApp en otro caso sí.
     """
     consulta = (
         select(Interaccion.timestamp)
+        .join(Caso, Interaccion.caso_id == Caso.id)
         .where(
-            Interaccion.caso_id == caso_id,
+            Caso.ciudadano_id == ciudadano_id,
             Interaccion.actor == ActorInteraccion.ciudadano,
+            Interaccion.canal == Canal.whatsapp,
         )
         .order_by(Interaccion.timestamp.desc())
         .limit(1)
