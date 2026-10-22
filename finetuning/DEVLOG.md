@@ -749,8 +749,8 @@ carpetas nuevas de Drive (`qwen_omnicivitas_app_*`) y mide tool calling sobre
 - [ ] Correr `finetuning_qwen_app_colab.ipynb` en Colab (estimado 2,5 a 3 h).
 - [ ] Servir el GGUF nuevo con Ollama y medir con
       `scripts/evaluar_modelo_local.py`; anotar acá la comparación.
-- [ ] `INSTRUCCION_IDENTIFICACION` (`app/agents/ejecutor.py`) está definida
-      desde la fase de WhatsApp/email pero ningún código la usa: decidir si se
-      agrega al prompt de quien no está identificado o se borra. El dataset
-      copia el comportamiento actual (sin la instrucción).
+- [x] `INSTRUCCION_IDENTIFICACION` (`app/agents/ejecutor.py`) estaba
+      definida desde la fase de WhatsApp/email pero ningún código la usaba. Se
+      activa: `prompt_del_sistema` la agrega mientras el ciudadano no informó su
+      DNI, y el dataset la incluye en las conversaciones de identificación.
 

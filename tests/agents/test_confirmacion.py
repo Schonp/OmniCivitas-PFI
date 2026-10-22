@@ -83,3 +83,13 @@ def test_solo_identificarse_no_cierra_el_turno():
     identidad = ({"name": "registrar_identidad", "args": {}}, {"nombre": "Marta Ruiz"})
 
     assert _cierre_sin_modelo([identidad], Canal.whatsapp) is None
+
+
+# --- Prompt del ejecutor según la identificación -----------------------------
+
+
+def test_quien_no_informo_su_dni_recibe_la_instruccion_de_identificarse():
+    from app.agents.ejecutor import INSTRUCCION_IDENTIFICACION, prompt_del_sistema
+
+    assert INSTRUCCION_IDENTIFICACION in prompt_del_sistema(Canal.whatsapp, identificado=False)
+    assert INSTRUCCION_IDENTIFICACION not in prompt_del_sistema(Canal.whatsapp, identificado=True)

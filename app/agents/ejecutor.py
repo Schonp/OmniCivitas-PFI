@@ -84,7 +84,8 @@ IMPORTANTE — es el primer contacto y todavía no sabés quién es:
   el organismo los necesita para gestionar la solicitud a su nombre.
 - Si en este mensaje ya los informó, registralos con `registrar_identidad` y seguí
   con la gestión en la misma respuesta, sin volver a pedirlos.
-- Hasta tener esos datos no uses ninguna otra herramienta."""
+- Hasta tener esos datos no uses ninguna otra herramienta, salvo `derivar_a_operador`
+  si pide hablar con una persona."""
 
 
 def construir_tools(db: AsyncSession, state: AgentState) -> list[BaseTool]:
@@ -220,6 +221,7 @@ def prompt_del_sistema(
     *,
     conocimiento: list[str] | None = None,
     origen_menu: str | None = None,
+    identificado: bool = True,
     hoy: datetime | None = None,
 ) -> str:
     """El prompt del sistema del ejecutor, tal como lo ve el modelo.
@@ -233,6 +235,10 @@ def prompt_del_sistema(
     # Sin la fecha, "el jueves a las 10" no tiene cómo pasar a AAAA-MM-DD.
     partes = [SYSTEM_EJECUTOR, f"\n\nHoy es {dia_en_palabras(hoy)} de {hoy.year}."]
     partes.append(FORMATO_VOZ if canal == Canal.voz else FORMATO_TEXTO)
+    if not identificado:
+        # Mientras arrastre el documento provisorio del alta automática, el
+        # organismo no sabe a nombre de quién gestionar: primero nombre y DNI.
+        partes.append(INSTRUCCION_IDENTIFICACION)
     if conocimiento:
         partes.append(
             "\n\nInformación del organismo (fuente oficial: usala para responder "
@@ -300,6 +306,9 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
                 Canal(state["canal"]),
                 conocimiento=state.get("conocimiento"),
                 origen_menu=state.get("origen_menu"),
+                # Mismo criterio que `construir_tools` para ofrecer
+                # `registrar_identidad`: sin el dato, no está identificado.
+                identificado=bool(state.get("identificado")),
             )
         )
     ]

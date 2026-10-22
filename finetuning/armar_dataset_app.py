@@ -115,7 +115,11 @@ def conversacion_ejecutor(
 ) -> dict:
     canal = canal or _canal_ejecutor()
     sistema = prompt_del_sistema(
-        canal, conocimiento=conocimiento, origen_menu=origen_menu, hoy=hoy
+        canal,
+        conocimiento=conocimiento,
+        origen_menu=origen_menu,
+        identificado=identificado,
+        hoy=hoy,
     )
     tools = _tools(intencion, identificado)
     return {
