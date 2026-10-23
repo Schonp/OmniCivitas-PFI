@@ -186,3 +186,53 @@ def test_el_prompt_no_manda_a_derivar_lo_que_se_puede_contestar():
 
     assert "Nunca derives una consulta que ya podés contestar" in SYSTEM_EJECUTOR
     assert "informar" in SYSTEM_EJECUTOR
+
+
+async def test_sin_dni_no_se_crea_el_reclamo_y_se_piden_los_datos(db_session, mocker):
+    """El modelo a veces crea el reclamo aunque el prompt le pida identificar
+    primero: el ejecutor no lo deja correr y le pide nombre y DNI."""
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        return_value=_AI(
+            content="",
+            tool_calls=[
+                {
+                    "name": "crear_reclamo",
+                    "args": {"descripcion": "Pozo en Av. Rivadavia 3200", "categoria": "infraestructura"},
+                    "id": "tc1",
+                    "type": "tool_call",
+                }
+            ],
+        )
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+    crear = mocker.patch.object(mod.reclamos, "crear_reclamo")
+
+    resultado = await mod.nodo_ejecutor(
+        {
+            "mensaje": "Hay un pozo en Av. Rivadavia 3200",
+            "canal": "whatsapp",
+            "identificador": "+5491100000088",
+            "ciudadano_id": str(uuid.uuid4()),
+            "identificado": False,
+            "caso_id": None,
+            "historial": [],
+            "conocimiento": [],
+            "intencion": "reclamo",
+            "entidades": {},
+            "confianza": 0.9,
+            "resultado_ejecucion": None,
+            "requiere_escalado": False,
+            "motivo_escalado": None,
+            "respuesta": None,
+        },
+        db_session,
+    )
+
+    crear.assert_not_called()
+    assert resultado["respuesta"].startswith("Tomé nota de su reclamo.")
+    assert "DNI" in resultado["respuesta"]

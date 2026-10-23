@@ -93,3 +93,13 @@ def test_quien_no_informo_su_dni_recibe_la_instruccion_de_identificarse():
 
     assert INSTRUCCION_IDENTIFICACION in prompt_del_sistema(Canal.whatsapp, identificado=False)
     assert INSTRUCCION_IDENTIFICACION not in prompt_del_sistema(Canal.whatsapp, identificado=True)
+
+
+def test_el_pedido_de_identificacion_nombra_la_gestion():
+    from app.agents.confirmacion import pedido_de_identificacion
+
+    texto = pedido_de_identificacion("crear_reclamo", Canal.whatsapp)
+    assert texto.startswith("Tomé nota de su reclamo.")
+    assert "DNI" in texto
+    assert "\n" not in pedido_de_identificacion("crear_reserva", Canal.voz)
+

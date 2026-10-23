@@ -87,6 +87,23 @@ def confirmacion(nombre: str, args: dict, salida: dict, canal: Canal) -> str | N
     return None
 
 
+def pedido_de_identificacion(nombre: str, canal: Canal) -> str:
+    """Lo que se le responde a quien todavía no informó su DNI cuando el modelo
+    intenta crear un reclamo o una reserva a su nombre."""
+    que = {"crear_reclamo": "su reclamo", "crear_reserva": "su pedido de turno"}.get(
+        nombre, "su pedido"
+    )
+    if canal == Canal.voz:
+        return (
+            f"Tomé nota de {que}. Para gestionarlo a su nombre necesito su nombre "
+            "completo y su número de documento. ¿Me los dice?"
+        )
+    return (
+        f"Tomé nota de {que}. Para gestionarlo a su nombre necesito su nombre "
+        "completo y su DNI.\n\n¿Me los indica?"
+    )
+
+
 def agradecimiento(salida_identidad: dict) -> str:
     """Prefijo cuando el ciudadano se identificó en el mismo mensaje."""
     nombre = (salida_identidad.get("nombre") or "").split()

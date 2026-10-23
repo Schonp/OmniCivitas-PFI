@@ -745,12 +745,58 @@ carpetas nuevas de Drive (`qwen_omnicivitas_app_*`) y mide tool calling sobre
 
 ### Qué queda
 
-- [ ] Commit y push (el notebook clona el repo desde GitHub).
-- [ ] Correr `finetuning_qwen_app_colab.ipynb` en Colab (estimado 2,5 a 3 h).
-- [ ] Servir el GGUF nuevo con Ollama y medir con
-      `scripts/evaluar_modelo_local.py`; anotar acá la comparación.
+- [x] Commit y push (el notebook clona el repo desde GitHub).
+- [x] Correr `finetuning_qwen_app_colab.ipynb` en Colab (entrada siguiente).
+- [x] Servir el GGUF nuevo con Ollama y medir con
+      `scripts/evaluar_modelo_local.py` (entrada siguiente).
 - [x] `INSTRUCCION_IDENTIFICACION` (`app/agents/ejecutor.py`) estaba
       definida desde la fase de WhatsApp/email pero ningún código la usaba. Se
       activa: `prompt_del_sistema` la agrega mientras el ciudadano no informó su
       DNI, y el dataset la incluye en las conversaciones de identificación.
+
+---
+
+## 2026-10-22 — Resultados de la segunda versión
+
+El notebook `finetuning_qwen_app_colab.ipynb` entrenó las 2 épocas en unas 2,5
+horas (checkpoints 169 y 338) y exportó el GGUF a Drive sin cortes. En Ollama
+(0.40.8) quedan los dos modelos: `omnicivitas-qwen` es la v2 y
+`omnicivitas-qwen-v1` la primera versión, para poder comparar.
+
+Por el camino de la app, mismos prompts, misma versión de Ollama, mismas 67:
+
+| Modelo | Intención | Falsos positivos | Tool calling exacto | Sin texto libre | s/mensaje |
+|---|---|---|---|---|---|
+| v1 | 100% | 0 | 59,7% (40/67) | 71,6% (48/67) | 3,7 |
+| **v2** | **100%** | **0** | **80,6% (54/67)** | **97,0% (65/67)** | **3,2** |
+
+Los 11 casos entre exacto y sin texto libre tienen herramienta y categoría
+correctas: solo cambia la redacción de `descripcion` o `referencia`. Los 2
+errores que quedan: "no podaron los árboles y las ramas tapan la luz" sale
+`infraestructura` en vez de `servicio` (caso de borde: también habla del
+alumbrado) y "la plaza San Martín está llena de pozos" pide calle y altura en
+vez de registrar con el nombre de la plaza.
+
+### Conversación real: la identificación no la respetaba el modelo
+
+Corriendo el grafo completo contra la base de desarrollo, la v2 registró el
+reclamo de un ciudadano nuevo sin pedirle nombre y DNI, aunque la instrucción
+estaba en el prompt. En el dataset, de 55 conversaciones de identificación solo
+un tercio enseña a pedir los datos primero, contra unos 200 reclamos completos
+que llaman directo a `crear_reclamo`.
+
+Arreglo en código, no en el modelo: mientras el ciudadano no informó su DNI, el
+ejecutor no deja correr `crear_reclamo` ni `crear_reserva`. Si el modelo las
+pide, se responde con un pedido de datos armado por código
+(`confirmacion.pedido_de_identificacion`). El mensaje queda en el caso que abre
+el grafo, así que en el turno siguiente, con nombre y DNI, el modelo registra la
+identidad y crea el reclamo en el mismo turno (la identidad corre primero
+aunque venga después en la respuesta), y la confirmación arranca con
+"Gracias, Marta.". Verificado en la conversación real: 3 a 5 s por turno.
+
+### Qué queda
+
+- [ ] Si se vuelve a entrenar: más conversaciones de identificación que pidan
+      los datos primero, para que el modelo lo haga solo y la regla del código
+      quede como red de seguridad.
 

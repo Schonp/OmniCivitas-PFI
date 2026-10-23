@@ -10,7 +10,12 @@ from langchain_core.tools import BaseTool, tool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import llm
-from app.agents.confirmacion import agradecimiento, confirmacion, dia_en_palabras
+from app.agents.confirmacion import (
+    agradecimiento,
+    confirmacion,
+    dia_en_palabras,
+    pedido_de_identificacion,
+)
 from app.agents.state import AgentState
 from app.db.models import ActorInteraccion, Canal
 from app.agents.eleccion import ETIQUETA_TIPO
@@ -21,6 +26,9 @@ from app.tools.reclamos import CategoriaReclamo
 logger = logging.getLogger(__name__)
 
 MAX_ITERACIONES = 3
+# Las herramientas que crean algo a nombre del ciudadano: no corren mientras
+# no haya informado su DNI (ver `nodo_ejecutor`).
+GESTIONES = {"crear_reclamo", "crear_reserva"}
 ZONA_HORARIA = ZoneInfo("America/Argentina/Buenos_Aires")
 MAX_FALLOS = 1
 
@@ -326,6 +334,10 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
     resultado_ejecucion: dict = {}
     caso_id = state.get("caso_id")
     fallos = 0
+    identificado = bool(state.get("identificado"))
+    # La identidad registrada en una vuelta anterior del mismo turno, para que
+    # la confirmación del reclamo que sigue empiece agradeciéndole por nombre.
+    identidad: tuple[dict, dict] | None = None
 
     for _ in range(MAX_ITERACIONES):
         respuesta_llm: AIMessage = await modelo.ainvoke(mensajes)
@@ -348,7 +360,25 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
         mensajes.append(respuesta_llm)
         exitosas: list[tuple[dict, dict]] = []
         hubo_fallo = False
-        for tool_call in respuesta_llm.tool_calls:
+        # La identidad primero: si en el mismo mensaje dio sus datos y el
+        # reclamo, el reclamo tiene que quedar a su nombre y no al provisorio.
+        llamadas = sorted(
+            respuesta_llm.tool_calls, key=lambda c: c["name"] != "registrar_identidad"
+        )
+        for tool_call in llamadas:
+            if tool_call["name"] in GESTIONES and not identificado:
+                # La instrucción del prompt pide los datos antes de gestionar,
+                # pero el modelo a veces crea el reclamo igual. Acá no depende
+                # de que obedezca: sin DNI no se crea nada y se le piden los
+                # datos. El mensaje queda en el caso, así que en el próximo
+                # turno, ya identificado, el modelo retoma la gestión.
+                return {
+                    "resultado_ejecucion": resultado_ejecucion or None,
+                    "caso_id": caso_id,
+                    "respuesta": pedido_de_identificacion(
+                        tool_call["name"], Canal(state["canal"])
+                    ),
+                }
             herramienta = tools_por_nombre.get(tool_call["name"])
             try:
                 if herramienta is None:
@@ -368,6 +398,9 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
                 salida = {"error": "La acción falló, intente de otra forma."}
             else:
                 exitosas.append((tool_call, salida if isinstance(salida, dict) else {}))
+                if tool_call["name"] == "registrar_identidad":
+                    identificado = True
+                    identidad = exitosas[-1]
 
             if isinstance(salida, dict):
                 resultado_ejecucion[tool_call["name"]] = salida
@@ -382,6 +415,8 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
         if hubo_fallo:
             # El modelo ve el error y decide: corregir el dato, preguntar o derivar.
             continue
+        if identidad is not None and identidad not in exitosas:
+            exitosas.insert(0, identidad)
         cierre = _cierre_sin_modelo(exitosas, Canal(state["canal"]))
         if cierre == DERIVAR:
             return {
