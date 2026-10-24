@@ -85,3 +85,32 @@ def test_la_referencia_del_caso_es_legible_y_lleva_prefijo_por_tipo():
             id=identificador, tipo=tipo, canal_origen=Canal.email, canal_actual=Canal.email
         )
         assert caso.referencia == f"{prefijo}-5072BFA2"
+
+
+async def test_al_sumar_el_contacto_los_casos_del_provisorio_pasan_a_la_persona(db_session):
+    """Lo que el vecino contó antes de identificarse es suyo: si el caso queda en
+    el registro provisorio, que ya no es alcanzable por ningún canal, se pierde."""
+    from sqlalchemy import select
+
+    from app.db.models import Canal, Caso, TipoCaso
+
+    del_padron = await crear_ciudadano(
+        db_session,
+        CiudadanoCreate(documento="28456789", nombre="Marta Ruiz", telefono="+5491133334444"),
+    )
+    provisorio = await crear_ciudadano(
+        db_session,
+        CiudadanoCreate(
+            documento=documento_provisorio(CORREO), nombre="Sin identificar", email=CORREO
+        ),
+    )
+    caso = Caso(
+        ciudadano_id=provisorio.id, tipo=TipoCaso.reclamo, canal_origen=Canal.email, canal_actual=Canal.email
+    )
+    db_session.add(caso)
+    await db_session.flush()
+
+    await identificar_ciudadano(db_session, provisorio.id, documento="28456789", nombre="Marta Ruiz")
+
+    duenio = (await db_session.execute(select(Caso.ciudadano_id).where(Caso.id == caso.id))).scalar_one()
+    assert duenio == del_padron.id

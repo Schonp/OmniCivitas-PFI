@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.channels import email as canal_email
 from app.channels import whatsapp
 from app.core.config import settings
+from app.agents.escalado import escalar_caso_por_falla
 from app.db.crud.auditoria import registrar_auditoria
 from app.db.models import ActorInteraccion, Canal, Ciudadano
 
@@ -172,6 +173,10 @@ async def responder_al_ciudadano(
             metadata={"canal": canal.value, **resultado.como_metadata()},
         )
         await db.commit()
+        if not resultado.transmitido and resultado.motivo != "texto_vacio":
+            # RNF-02: el ciudadano no recibió la respuesta. El caso pasa a una
+            # persona, que lo retoma por otro medio o cuando el canal vuelva.
+            await escalar_caso_por_falla(db, caso_id, "falla_envio")
     elif not resultado.transmitido:
         logger.error(
             "envio saliente: no se pudo responder por %s y no hay caso que auditar (%s)",

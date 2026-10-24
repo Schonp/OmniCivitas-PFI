@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "../auth";
+import { DerechosTitular } from "../componentes/DerechosTitular";
 import { CanalBadge, EstadoBadge, RecorridoCanal, TipoBadge } from "../componentes/Etiquetas";
 import { PanelPestana, Pestanas } from "../componentes/Pestanas";
 import {
@@ -325,6 +326,14 @@ export function DetalleCaso() {
                   Cerrar caso
                 </button>
               </div>
+            )}
+
+            {esSupervisor && (
+              <DerechosTitular
+                ciudadanoId={caso.ciudadano_id}
+                nombre={caso.ciudadano.nombre}
+                onCambio={() => cargar()}
+              />
             )}
           </div>
         </div>

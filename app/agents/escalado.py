@@ -38,6 +38,12 @@ MOTIVO_EN_CRIOLLO = {
         "Para avanzar con esto hace falta verificar sus datos, "
         "y eso lo hace una persona del equipo."
     ),
+    # RNF-02: el modelo no está disponible. El ciudadano no tiene por qué
+    # enterarse del detalle técnico, pero sí de que alguien lo va a atender.
+    "falla_tecnica": (
+        "En este momento no puedo procesar su mensaje, "
+        "así que lo va a atender una persona del equipo."
+    ),
 }
 
 APERTURA_POR_DEFECTO = (
@@ -122,6 +128,39 @@ def _motivo_real(state: AgentState) -> str:
     return "confianza_baja"
 
 
+async def _asignar_operador(db: AsyncSession, caso: Caso) -> Caso:
+    operador = await elegir_operador_con_menos_casos_activos(db)
+    if operador is None:
+        logger.warning("escalado: no hay operadores activos, el caso queda sin asignar")
+        return caso
+    return await asignar_caso(
+        db, caso, operador, actor=ACTOR_AGENTE, actor_tipo=ActorInteraccion.agente_ia
+    )
+
+
+async def escalar_caso_por_falla(db: AsyncSession, caso_id: uuid.UUID, motivo: str) -> None:
+    """Deriva un caso que ya existe cuando falla algo fuera del grafo (RNF-02).
+
+    Lo usa el envío saliente: si Meta o el servidor de correo rechazan la
+    respuesta del agente, el ciudadano no la recibe, y tiene que retomarlo una
+    persona. Un caso que ya está en manos de un operador o cerrado no se toca.
+    """
+    caso = await db.get(Caso, caso_id)
+    if caso is None or caso.estado in (EstadoCaso.escalado, EstadoCaso.cerrado) or caso.en_manos_humanas:
+        return
+    caso.estado = EstadoCaso.escalado
+    await registrar_auditoria(
+        db,
+        caso_id=caso.id,
+        accion="escalado",
+        actor=ACTOR_AGENTE,
+        actor_tipo=ActorInteraccion.agente_ia,
+        metadata={"motivo": motivo},
+    )
+    await db.commit()
+    await _asignar_operador(db, caso)
+
+
 async def nodo_escalado(state: AgentState, db: AsyncSession) -> dict:
     motivo = state.get("motivo_escalado") or _motivo_real(state)
     resumen = await _generar_resumen(state)
@@ -171,13 +210,7 @@ async def nodo_escalado(state: AgentState, db: AsyncSession) -> dict:
     # que la asignación automática deje exactamente el mismo rastro (estado
     # `en_progreso`, auditoría `asignacion`) que si un supervisor la hubiera
     # hecho a mano — solo cambia quién la hizo.
-    operador = await elegir_operador_con_menos_casos_activos(db)
-    if operador is not None:
-        caso = await asignar_caso(
-            db, caso, operador, actor=ACTOR_AGENTE, actor_tipo=ActorInteraccion.agente_ia
-        )
-    else:
-        logger.warning("escalado: no hay operadores activos, el caso queda sin asignar")
+    caso = await _asignar_operador(db, caso)
 
     return {
         "caso_id": str(caso.id),

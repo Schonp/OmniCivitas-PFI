@@ -264,3 +264,29 @@ async def test_el_correo_no_tiene_ventana(mocker):
 
     assert resultado.transmitido is True
     enviar.assert_awaited_once()
+
+
+async def test_si_la_respuesta_no_se_puede_enviar_el_caso_pasa_a_una_persona(db_session, ciudadano, mocker):
+    """RNF-03: si Meta o el servidor de correo rechazan la respuesta, el
+    ciudadano no la recibe y tiene que retomarlo un operador."""
+    from app.db.models import Auditoria, Caso, EstadoCaso, TipoCaso
+    from sqlalchemy import select
+
+    caso = Caso(ciudadano_id=ciudadano.id, tipo=TipoCaso.reclamo, canal_origen=Canal.email, canal_actual=Canal.email)
+    db_session.add(caso)
+    await db_session.commit()
+    mocker.patch.object(salida.canal_email, "enviar_mensaje", side_effect=TimeoutError("smtp caido"))
+
+    resultado = await salida.responder_al_ciudadano(
+        db_session, canal=Canal.email, ciudadano=ciudadano, texto="Registré su reclamo.", caso_id=caso.id
+    )
+
+    assert resultado.transmitido is False
+    estado = (await db_session.execute(
+        select(Caso.estado).where(Caso.id == caso.id).execution_options(populate_existing=True)
+    )).scalar_one()
+    assert estado in (EstadoCaso.escalado, EstadoCaso.en_progreso)
+    motivos = (await db_session.execute(
+        select(Auditoria.metadata_).where(Auditoria.caso_id == caso.id, Auditoria.accion == "escalado")
+    )).scalars().all()
+    assert motivos == [{"motivo": "falla_envio"}]

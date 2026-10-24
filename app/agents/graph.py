@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.aviso_ia import anteponer_aviso
 from app.agents.contexto import nodo_contexto, obtener_ciudadano_por_canal
 from app.agents.ejecutor import nodo_ejecutor
-from app.agents.escalado import nodo_escalado
+from app.agents.identidad import responde_con_su_identidad
+from app.agents.escalado import mensaje_escalado, nodo_escalado
 from app.agents.espera import nodo_espera
 from app.agents.intake import nodo_intake
 from app.agents.opciones import nodo_opciones
@@ -57,6 +58,19 @@ async def iniciar_checkpointer() -> None:
     logger.info("checkpointer de LangGraph inicializado")
 
 
+async def borrar_hilos(hilos: list[str]) -> None:
+    """Borra del checkpointer las conversaciones de esos hilos.
+
+    El estado del grafo guarda los mensajes del ciudadano tal cual: sin esto,
+    una baja (RF-13) dejaría su conversación entera en las tablas del
+    checkpointer aunque se hubiera anonimizado en las interacciones.
+    """
+    if _checkpointer is None:
+        return
+    for hilo in hilos:
+        await _checkpointer.adelete_thread(hilo)
+
+
 async def cerrar_checkpointer() -> None:
     global _pool, _checkpointer
     _checkpointer = None
@@ -67,7 +81,6 @@ async def cerrar_checkpointer() -> None:
 
 # Preguntar dos veces es atender; preguntar cinco es un laberinto.
 MAX_VUELTAS_SIN_DEFINIR = 2
-
 
 def _sin_definir(state: AgentState) -> bool:
     """No sabemos de qué se trata: ni el tipo ni la confianza alcanzan.
@@ -93,6 +106,13 @@ def decidir_ruta(state: AgentState) -> str:
     # operador nunca se enteraba de que le habían contestado.
     if state.get("en_manos_humanas"):
         return "espera"
+
+    # Antes que cualquier otra decisión que dependa de la intención: lo que
+    # trae es la respuesta al pedido de datos, y eso lo resuelve el ejecutor.
+    if state.get("ciudadano_id") is not None and responde_con_su_identidad(
+        bool(state.get("identificado")), state.get("mensaje")
+    ):
+        return "ejecutor"
 
     # Pedir hablar con una persona gana sobre el saludo. El clasificador llegó a
     # etiquetar "quisiera hablar con un operador" como saludo, y ahí el
@@ -339,6 +359,28 @@ async def _persistir_resultado(db: AsyncSession, final: AgentState) -> None:
     await db.commit()
 
 
+async def _derivar_por_falla(
+    db: AsyncSession, estado: AgentState, canal: Canal, identificador: str
+) -> AgentState:
+    """Deriva el mensaje a un operador sin pasar por el modelo.
+
+    Reusa el nodo de escalado, que ya tolera que el modelo no esté: si no puede
+    generar el resumen, deja el mensaje original para el operador.
+    """
+    ciudadano = await obtener_ciudadano_por_canal(db, canal, identificador)
+    caso = await obtener_caso_activo_de_ciudadano(db, ciudadano.id) if ciudadano else None
+    derivado: AgentState = {
+        **estado,
+        "ciudadano_id": str(ciudadano.id) if ciudadano else None,
+        "caso_id": str(caso.id) if caso else None,
+        "requiere_escalado": True,
+        "motivo_escalado": "falla_tecnica",
+    }
+    if ciudadano is None:
+        return {**derivado, "respuesta": mensaje_escalado("falla_tecnica", canal=canal)}
+    return {**derivado, **await nodo_escalado(derivado, db)}
+
+
 async def procesar_mensaje(
     db: AsyncSession,
     *,
@@ -360,7 +402,15 @@ async def procesar_mensaje(
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
 
     grafo = construir_grafo(db, saver)
-    final: AgentState = await grafo.ainvoke(estado, config=config)
+    try:
+        final: AgentState = await grafo.ainvoke(estado, config=config)
+    except Exception:
+        # RNF-02: si el servidor del modelo no responde (caído, sin memoria,
+        # con un error), el ciudadano igual tiene que recibir una respuesta.
+        # Sin esto la excepción subía hasta el webhook y el mensaje se perdía.
+        logger.exception("procesar_mensaje: falló el procesamiento; se deriva el caso a una persona")
+        await db.rollback()
+        final = await _derivar_por_falla(db, estado, canal, identificador)
 
     await _persistir_resultado(db, final)
     logger.debug(

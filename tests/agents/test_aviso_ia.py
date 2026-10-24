@@ -243,3 +243,29 @@ async def test_el_aviso_es_por_canal(
 
     assert por_whatsapp["respuesta"].startswith(AVISO_IA)
     assert por_correo["respuesta"].startswith(AVISO_IA)
+
+
+async def test_el_primer_contacto_informa_que_datos_se_guardan_y_como_ejercer_derechos(
+    db_session, ciudadano, mock_llms, checkpointer_en_memoria, vigencia_del_aviso
+):
+    """RF-02: qué se guarda, para qué y cómo pedir consultarlo o darlo de baja.
+    Una sola vez: en el contacto siguiente, aunque sea por otro canal, ya no."""
+    from app.agents.aviso_ia import AVISO_DATOS
+
+    consulta = ClasificacionIntent(intencion="consulta", entidades={}, confianza=0.9)
+    mock_llms(
+        [consulta, consulta],
+        respuestas_ejecutor=[AIMessage(content="Atendemos de 8 a 14."), AIMessage(content="Sí, también los sábados.")],
+    )
+    primero = await procesar_mensaje(
+        db_session, mensaje="¿Qué horario tienen?", canal=Canal.email,
+        identificador=ciudadano.email, checkpointer=checkpointer_en_memoria,
+    )
+    segundo = await procesar_mensaje(
+        db_session, mensaje="¿Y los sábados?", canal=Canal.whatsapp,
+        identificador=ciudadano.telefono, checkpointer=checkpointer_en_memoria,
+    )
+
+    assert AVISO_DATOS in primero["respuesta"]
+    assert "dar de baja" in AVISO_DATOS
+    assert AVISO_DATOS not in segundo["respuesta"]

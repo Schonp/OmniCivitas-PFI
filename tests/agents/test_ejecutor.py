@@ -236,3 +236,97 @@ async def test_sin_dni_no_se_crea_el_reclamo_y_se_piden_los_datos(db_session, mo
     crear.assert_not_called()
     assert resultado["respuesta"].startswith("Tomé nota de su reclamo.")
     assert "DNI" in resultado["respuesta"]
+
+
+def test_sin_identificar_se_ofrecen_todas_las_gestiones():
+    """La gestión pendiente está en el historial, no en el mensaje con el DNI."""
+    from app.agents.ejecutor import construir_tools
+
+    tools = construir_tools(
+        None,
+        {"ciudadano_id": str(uuid.uuid4()), "canal": "whatsapp", "intencion": "tramite", "identificado": False},
+    )
+    assert {t.name for t in tools} >= {"registrar_identidad", "crear_reclamo", "crear_reserva"}
+
+
+async def test_el_nombre_y_el_dni_se_registran_sin_el_modelo(db_session, mocker):
+    """El modelo volvía a pedir los datos que el ciudadano acababa de dar."""
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+
+    persona = SimpleNamespace(id=uuid.uuid4(), nombre="Laura Prueba", documento="30111292")
+    identificar = mocker.patch.object(mod.ciudadanos, "identificar_ciudadano", AsyncMock(return_value=persona))
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(return_value=_AI(content="¿En qué lo puedo ayudar?"))
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+
+    resultado = await mod.nodo_ejecutor(
+        {
+            "mensaje": "Laura Prueba, 30.111.292",
+            "canal": "whatsapp",
+            "identificador": "+5491100000088",
+            "ciudadano_id": str(uuid.uuid4()),
+            "identificado": False,
+            "caso_id": None,
+            "historial": [],
+            "conocimiento": [],
+            "intencion": "tramite",
+            "entidades": {},
+            "confianza": 0.9,
+            "resultado_ejecucion": None,
+            "requiere_escalado": False,
+            "motivo_escalado": None,
+            "respuesta": None,
+        },
+        db_session,
+    )
+
+    identificar.assert_awaited_once()
+    assert identificar.await_args.kwargs == {"documento": "30111292", "nombre": "Laura Prueba"}
+    assert resultado["identificado"] is True
+    assert resultado["ciudadano_id"] == str(persona.id)
+    assert resultado["respuesta"] == "Gracias, Laura. ¿En qué lo puedo ayudar?"
+
+
+async def test_recien_identificado_no_se_le_vuelven_a_pedir_los_datos(db_session, mocker):
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+
+    persona = SimpleNamespace(id=uuid.uuid4(), nombre="Laura Prueba", documento="30111292")
+    mocker.patch.object(mod.ciudadanos, "identificar_ciudadano", AsyncMock(return_value=persona))
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        return_value=_AI(content="Hola Laura. Para registrarlo necesito su nombre completo y su DNI.")
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+
+    resultado = await mod.nodo_ejecutor(
+        {
+            "mensaje": "Soy Laura Prueba, DNI 30111292", "canal": "email", "identificador": "x@correo.test",
+            "ciudadano_id": str(uuid.uuid4()), "identificado": False, "caso_id": None, "historial": [],
+            "conocimiento": [], "intencion": "tramite", "entidades": {}, "confianza": 0.9,
+            "resultado_ejecucion": None, "requiere_escalado": False, "motivo_escalado": None, "respuesta": None,
+        },
+        db_session,
+    )
+
+    assert resultado["respuesta"] == "Gracias, Laura. Ya registré sus datos. ¿En qué lo puedo ayudar?"
+
+
+def test_no_se_le_muestra_el_identificador_interno_del_caso():
+    from app.agents.ejecutor import _sin_identificadores_internos
+
+    texto = (
+        "Su reclamo está registrado.\n\nNúmero de caso: REC-1807DB61\n\n"
+        "Número de caso: 1807db61-d26c-4459-8244-7c02fd22c1ea"
+    )
+    assert _sin_identificadores_internos(texto) == (
+        "Su reclamo está registrado.\n\nNúmero de caso: REC-1807DB61"
+    )
+

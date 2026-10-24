@@ -103,3 +103,28 @@ def test_el_pedido_de_identificacion_nombra_la_gestion():
     assert "DNI" in texto
     assert "\n" not in pedido_de_identificacion("crear_reserva", Canal.voz)
 
+
+# --- Datos que el ciudadano no dio ----------------------------------------------
+
+
+def test_una_direccion_inventada_se_detecta():
+    from app.agents.ejecutor import datos_inventados
+
+    dichos = ["Hola, les escribo por correo. ¿Cómo va el reclamo del pozo?"]
+    assert datos_inventados("Pozo sin tapa en la esquina de Lavalle y Córdoba", dichos) == ["Lavalle", "Córdoba"]
+
+
+def test_lo_que_dijo_el_ciudadano_no_cuenta_como_inventado():
+    from app.agents.ejecutor import datos_inventados
+
+    dichos = ["Hay un pozo enorme en Av. Rivadavia 3200 y ayer se cayó una moto"]
+    assert datos_inventados("Pozo en la calzada en Av. Rivadavia 3200, con daño a una moto", dichos) == []
+    # "Avenida" escrita como "Av." no es un dato nuevo.
+    assert datos_inventados("Pozo en Av. Rivadavia 3200", ["un pozo en Avenida Rivadavia 3200"]) == []
+
+
+def test_un_numero_que_no_dijo_tambien_cuenta():
+    from app.agents.ejecutor import datos_inventados
+
+    assert datos_inventados("Poste caído en Thames 1400", ["hay un poste caído en Thames"]) == ["1400"]
+

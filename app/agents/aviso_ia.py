@@ -26,6 +26,16 @@ AVISO_IA = (
     "Si en algún momento prefiere hablar con una persona del equipo, pídamelo y lo derivo."
 )
 
+# RF-02: en el primer contacto, qué se guarda, para qué y cómo ejercer los
+# derechos de la Ley 25.326. Una sola vez: repetirlo en cada conversación lo
+# convierte en ruido que nadie lee.
+AVISO_DATOS = (
+    "Para gestionar su pedido el organismo guarda su número de teléfono o su correo, "
+    "su nombre y DNI si los informa, y lo que cuente en esta conversación. Se usan solo "
+    "para atenderlo. Puede pedir consultar, corregir o dar de baja sus datos cuando quiera, "
+    "por este mismo medio."
+)
+
 
 async def ya_se_le_aviso(
     db: AsyncSession, ciudadano_id: uuid.UUID, canal: Canal
@@ -47,6 +57,21 @@ async def ya_se_le_aviso(
     return (await db.execute(consulta)).scalars().first() is not None
 
 
+async def es_primer_contacto(db: AsyncSession, ciudadano_id: uuid.UUID) -> bool:
+    """¿El organismo nunca le respondió nada, por ningún canal?"""
+    consulta = (
+        select(Interaccion.id)
+        .join(Caso, Caso.id == Interaccion.caso_id)
+        .where(
+            Caso.ciudadano_id == ciudadano_id,
+            Interaccion.actor != ActorInteraccion.ciudadano,
+            Interaccion.interna.is_(False),
+        )
+        .limit(1)
+    )
+    return (await db.execute(consulta)).scalars().first() is None
+
+
 async def anteponer_aviso(
     db: AsyncSession, ciudadano_id: uuid.UUID, canal: Canal, texto: str
 ) -> str:
@@ -55,4 +80,6 @@ async def anteponer_aviso(
         return texto
     if await ya_se_le_aviso(db, ciudadano_id, canal):
         return texto
+    if await es_primer_contacto(db, ciudadano_id):
+        return f"{AVISO_IA} {AVISO_DATOS}\n\n{texto}"
     return f"{AVISO_IA}\n\n{texto}"

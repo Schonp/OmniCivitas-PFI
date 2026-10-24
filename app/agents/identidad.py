@@ -1,0 +1,61 @@
+"""Reconocimiento de la respuesta del ciudadano al pedido de nombre y DNI.
+
+Registrar la identidad no se le deja al modelo. En las pruebas sobre el sistema
+completo, el modelo a veces volvía a pedir los datos que el ciudadano acababa
+de dar, y el intake llegaba a clasificar "Laura Pérez, 30.111.291" como un
+trámite, que se deriva directo a una persona. Un DNI tiene una forma fija y el
+nombre viene al lado: se puede leer con reglas, sin depender de una inferencia.
+"""
+
+import re
+
+# Un DNI argentino, con o sin puntos: 7 u 8 dígitos ("30.111.291", "30111291").
+DNI = re.compile(r"\b\d{1,2}\.?\d{3}\.?\d{3}\b")
+
+# La presentación no distingue mayúsculas; el nombre sí: arranca con mayúscula,
+# lo que evita llevarse la palabra siguiente ("soy Juan Pérez, DNI ...").
+_PRESENTACION = re.compile(
+    r"(?i:soy|me llamo|mi nombre es)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñü]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñü]+){0,3})"
+)
+_RELLENO = {
+    "soy", "me", "llamo", "mi", "nombre", "es", "y", "el", "la", "de", "dni",
+    "documento", "número", "numero", "nro", "hola", "buenas", "buen", "día", "dia",
+    "tardes", "noches", "mis", "datos", "son", "con",
+}
+_MAX_PALABRAS_DE_NOMBRE = 5
+
+
+def extraer_identidad(texto: str) -> tuple[str | None, str] | None:
+    """(nombre, documento) si el texto trae un DNI; None si no lo trae.
+
+    El nombre sale de una presentación explícita ("soy Laura Pérez") o, si el
+    mensaje es solo el dato pedido ("Laura Pérez, 30.111.291"), de las palabras
+    que acompañan al número. Si el mensaje cuenta además otra cosa, no se
+    adivina qué parte es el nombre: se devuelve None en su lugar.
+    """
+    coincidencia = DNI.search(texto or "")
+    if coincidencia is None:
+        return None
+    documento = coincidencia.group(0).replace(".", "")
+
+    presentacion = _PRESENTACION.search(texto)
+    if presentacion:
+        palabras = [p for p in presentacion.group(1).split() if p.lower() not in _RELLENO]
+        if palabras:
+            return _formatear(" ".join(palabras)), documento
+
+    resto = (texto[: coincidencia.start()] + " " + texto[coincidencia.end():])
+    palabras = [p for p in re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñü]+", resto) if p.lower() not in _RELLENO]
+    if 0 < len(palabras) <= _MAX_PALABRAS_DE_NOMBRE:
+        return _formatear(" ".join(palabras)), documento
+    return None, documento
+
+
+def _formatear(nombre: str) -> str:
+    return " ".join(p[:1].upper() + p[1:].lower() for p in nombre.split())
+
+
+def responde_con_su_identidad(identificado: bool, mensaje: str | None) -> bool:
+    """Quien todavía no informó su DNI y manda uno está contestando el pedido de
+    datos del agente: el mensaje continúa el caso y lo resuelve el ejecutor."""
+    return not identificado and bool(DNI.search(mensaje or ""))

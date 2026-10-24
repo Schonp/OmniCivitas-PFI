@@ -18,7 +18,9 @@ from app.agents.confirmacion import (
 )
 from app.agents.state import AgentState
 from app.db.models import ActorInteraccion, Canal
+from app.agents.contexto import obtener_ciudadano_por_canal
 from app.agents.eleccion import ETIQUETA_TIPO
+from app.agents.identidad import extraer_identidad
 from app.db.crud import ciudadanos
 from app.tools import consultas, reclamos, reservas
 from app.tools.reclamos import CategoriaReclamo
@@ -193,8 +195,15 @@ def construir_tools(db: AsyncSession, state: AgentState) -> list[BaseTool]:
     tools = tools_por_intencion.get(state["intencion"] or "", [consultar_estado_caso])
     # Sin identificar, el ejecutor tiene que poder registrar el nombre y el DNI
     # en cuanto el ciudadano los informe, cualquiera sea la intención detectada.
+    # Y tiene que poder completar la gestión que el ciudadano contó antes de
+    # identificarse: el mensaje que trae los datos ("Laura Pérez, 30.111.291")
+    # no dice si era un reclamo o un turno, eso está en el historial.
     if not state.get("identificado"):
-        tools = [registrar_identidad, *tools]
+        tools = [registrar_identidad, crear_reclamo, crear_reserva, consultar_estado_caso]
+    elif state.get("recien_identificado"):
+        # Se identificó en este mismo mensaje: la gestión pendiente sigue siendo
+        # la del historial, no la que sugiere el mensaje con sus datos.
+        tools = [crear_reclamo, crear_reserva, consultar_estado_caso]
     # Siempre disponible: el ciudadano tiene que poder llegar a una persona,
     # que fue lo más pedido después de la reserva de turnos en la encuesta.
     return [*tools, derivar_a_operador]
@@ -213,15 +222,30 @@ def _sin_markdown(texto: str) -> str:
     return limpio
 
 
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+
+
+def _sin_identificadores_internos(texto: str) -> str:
+    """Quita las líneas con un identificador interno (el `caso_id`).
+
+    El prompt pide usar siempre la referencia (REC-...) y nunca el id, pero el
+    modelo a veces copia el `caso_id` que vuelve en el resultado de la
+    herramienta: en una prueba respondió "Número de caso: 1807db61-d26c-...".
+    Para el ciudadano es ruido, y es un dato interno del sistema.
+    """
+    lineas = [linea for linea in texto.splitlines() if not _UUID.search(linea)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lineas)).strip()
+
+
 def _texto(mensaje: AIMessage) -> str:
     if isinstance(mensaje.content, str):
-        return _sin_markdown(mensaje.content)
+        return _sin_identificadores_internos(_sin_markdown(mensaje.content))
     partes = [
         bloque.get("text", "")
         for bloque in mensaje.content
         if isinstance(bloque, dict) and bloque.get("type") == "text"
     ]
-    return _sin_markdown("".join(partes))
+    return _sin_identificadores_internos(_sin_markdown("".join(partes)))
 
 
 def prompt_del_sistema(
@@ -267,6 +291,37 @@ def prompt_del_sistema(
     return "".join(partes)
 
 
+# Palabras que el modelo agrega al normalizar una dirección sin que el
+# ciudadano las haya escrito así ("Avenida" pasa a "Av."): no son datos nuevos.
+_ABREVIATURAS = {"av", "avda", "avenida", "calle", "esquina", "altura", "barrio", "plaza"}
+
+
+def datos_inventados(descripcion: str, dichos_del_ciudadano: list[str]) -> list[str]:
+    """Números y nombres propios de la descripción que el ciudadano no dijo.
+
+    El modelo a veces completa la dirección de un reclamo que el ciudadano no
+    dio: en una prueba sobre el sistema completo registró un pozo "en la esquina
+    de Lavalle y Córdoba" cuando el ciudadano solo había preguntado por el
+    estado de su reclamo. Las cifras y los nombres propios de una dirección son
+    justo lo que no puede inventar, y se pueden verificar contra lo que el
+    ciudadano escribió.
+    """
+    dicho = " ".join(dichos_del_ciudadano).lower()
+    palabras_dichas = set(re.findall(r"[a-záéíóúñü0-9]+", dicho))
+    faltantes = []
+    for indice, palabra in enumerate(re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñü0-9]+", descripcion)):
+        es_numero = palabra.isdigit()
+        es_nombre_propio = palabra[:1].isupper() and indice > 0
+        if not (es_numero or es_nombre_propio):
+            continue
+        if palabra.lower() in _ABREVIATURAS or palabra.lower() in palabras_dichas:
+            continue
+        faltantes.append(palabra)
+    return faltantes
+
+
+_VUELVE_A_PEDIR_DATOS = re.compile(r"nombre completo|su DNI|número de documento", re.IGNORECASE)
+
 DERIVAR = "derivar"
 
 
@@ -299,7 +354,50 @@ def _cierre_sin_modelo(exitosas: list[tuple[dict, dict]], canal: Canal) -> str |
     return prefijo + "\n\n".join(confirmaciones)
 
 
+async def _registrar_identidad_del_mensaje(
+    state: AgentState, db: AsyncSession
+) -> tuple[AgentState, tuple[dict, dict] | None]:
+    """Si quien no está identificado manda su nombre y su DNI, se registran acá,
+    sin el modelo (ver `app/agents/identidad.py`)."""
+    if state.get("identificado") or not state.get("ciudadano_id"):
+        return state, None
+    datos = extraer_identidad(state["mensaje"])
+    if datos is None or datos[0] is None:
+        return state, None
+    nombre, documento = datos
+    ciudadano = await ciudadanos.identificar_ciudadano(
+        db, uuid.UUID(state["ciudadano_id"]), documento=documento, nombre=nombre
+    )
+    llamada = {"name": "registrar_identidad", "args": {"nombre_completo": nombre, "documento": documento}}
+    salida = {"identificado": True, "nombre": ciudadano.nombre, "documento": ciudadano.documento}
+    # Si el DNI ya era de otra persona, el contacto se sumó a ella: lo que siga
+    # en este turno (el reclamo pendiente) se gestiona a su nombre.
+    nuevo = {**state, "ciudadano_id": str(ciudadano.id), "identificado": True, "recien_identificado": True}
+    return nuevo, (llamada, salida)
+
+
 async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
+    state, identidad = await _registrar_identidad_del_mensaje(state, db)
+    resultado = await _resolver(state, db, identidad)
+    if state.get("recien_identificado"):
+        resultado = {**resultado, "ciudadano_id": state["ciudadano_id"], "identificado": True}
+        respuesta = resultado.get("respuesta")
+        datos = identidad[1] if identidad else {}
+        if respuesta and _VUELVE_A_PEDIR_DATOS.search(respuesta):
+            # Acaba de darlos: volver a pedírselos es lo peor que puede pasar en
+            # este punto. Pasó en una prueba, después de que el control de datos
+            # inventados frenara un reclamo y el modelo se desorientara.
+            resultado["respuesta"] = agradecimiento(datos) + "Ya registré sus datos. ¿En qué lo puedo ayudar?"
+        elif respuesta and datos:
+            nombre = (datos.get("nombre") or "").split()
+            if nombre and nombre[0].lower() not in respuesta.lower():
+                resultado["respuesta"] = agradecimiento(datos) + respuesta
+    return resultado
+
+
+async def _resolver(
+    state: AgentState, db: AsyncSession, identidad: tuple[dict, dict] | None
+) -> dict:
     tools = construir_tools(db, state)
     tools_por_nombre = {t.name: t for t in tools}
     modelo = llm.get_llm_ejecutor().bind_tools(tools)
@@ -335,9 +433,9 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
     caso_id = state.get("caso_id")
     fallos = 0
     identificado = bool(state.get("identificado"))
-    # La identidad registrada en una vuelta anterior del mismo turno, para que
-    # la confirmación del reclamo que sigue empiece agradeciéndole por nombre.
-    identidad: tuple[dict, dict] | None = None
+    # `identidad` guarda la identidad registrada en este mismo turno (por el
+    # código o por el modelo), para que la confirmación del reclamo que sigue
+    # empiece agradeciéndole por nombre.
 
     for _ in range(MAX_ITERACIONES):
         respuesta_llm: AIMessage = await modelo.ainvoke(mensajes)
@@ -380,6 +478,40 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
                     ),
                 }
             herramienta = tools_por_nombre.get(tool_call["name"])
+            if tool_call["name"] == "crear_reclamo":
+                dichos = [state["mensaje"]] + [
+                    e.get("contenido") or ""
+                    for e in state.get("historial") or []
+                    if e.get("actor") == ActorInteraccion.ciudadano.value
+                ]
+                inventados = datos_inventados(tool_call["args"].get("descripcion") or "", dichos)
+                if inventados:
+                    # No se ejecuta: el modelo recibe el motivo y pregunta en
+                    # vez de registrar un reclamo con datos que nadie dio.
+                    logger.warning("ejecutor: descripción con datos no dichos: %s", inventados)
+                    hubo_fallo = True
+                    fallos += 1
+                    if fallos > MAX_FALLOS:
+                        return {
+                            "resultado_ejecucion": resultado_ejecucion or None,
+                            "caso_id": caso_id,
+                            "requiere_escalado": True,
+                            "motivo_escalado": "fallo_ejecucion",
+                        }
+                    mensajes.append(
+                        ToolMessage(
+                            content=json.dumps(
+                                {
+                                    "error": "La descripción incluye datos que el ciudadano no dio: "
+                                    + ", ".join(inventados)
+                                    + ". No inventes datos: preguntale lo que falta o usá solo lo que dijo."
+                                },
+                                ensure_ascii=False,
+                            ),
+                            tool_call_id=tool_call["id"],
+                        )
+                    )
+                    continue
             try:
                 if herramienta is None:
                     raise ValueError(f"herramienta no ofrecida: {tool_call['name']}")
@@ -401,6 +533,16 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
                 if tool_call["name"] == "registrar_identidad":
                     identificado = True
                     identidad = exitosas[-1]
+                    # Si el DNI ya existía, el contacto se sumó a esa persona:
+                    # las herramientas que sigan tienen que actuar a su nombre.
+                    actual = await obtener_ciudadano_por_canal(
+                        db, Canal(state["canal"]), state["identificador"]
+                    )
+                    if actual is not None and str(actual.id) != state["ciudadano_id"]:
+                        state = {**state, "ciudadano_id": str(actual.id), "identificado": True, "recien_identificado": True}
+                        tools = construir_tools(db, state)
+                        tools_por_nombre = {t.name: t for t in tools}
+                        modelo = llm.get_llm_ejecutor().bind_tools(tools)
 
             if isinstance(salida, dict):
                 resultado_ejecucion[tool_call["name"]] = salida

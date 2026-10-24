@@ -20,3 +20,12 @@ class CiudadanoOut(BaseModel):
     email: str | None
     telefono: str | None
     created_at: datetime
+
+
+class CiudadanoRectificacion(BaseModel):
+    """Campos que el titular puede pedir corregir (RF-14). Solo se tocan los presentes."""
+
+    nombre: str | None = Field(default=None, max_length=200)
+    email: str | None = Field(default=None, max_length=200)
+    telefono: str | None = Field(default=None, max_length=30)
+

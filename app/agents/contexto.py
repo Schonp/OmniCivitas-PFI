@@ -4,6 +4,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.espera import contacto_reciente
+from app.agents.identidad import responde_con_su_identidad
 from app.agents.state import AgentState
 from app.db.crud.casos import obtener_caso_activo_de_ciudadano, obtener_caso_por_id
 from app.db.crud.ciudadanos import (
@@ -91,6 +92,11 @@ async def nodo_contexto(state: AgentState, db: AsyncSession) -> dict:
         pertenece_al_hilo = activo is not None and contacto_reciente(
             await ultimo_mensaje_al_ciudadano(db, activo.id)
         )
+    elif responde_con_su_identidad(esta_identificado(ciudadano), state.get("mensaje")):
+        # Es la respuesta al pedido de nombre y DNI: el pedido que la motivó
+        # está en el caso abierto. Si el intake lo toma como tema nuevo, se
+        # abre otro caso con el nombre y el DNI como descripción.
+        pertenece_al_hilo = True
     else:
         # Un tema nuevo no se pega al caso abierto ni hereda su historial: el
         # ciudadano puede tener un reclamo en curso y preguntar por otra cosa.

@@ -66,3 +66,21 @@ def test_pedir_un_humano_gana_sobre_el_saludo():
 
 def test_un_saludo_a_secas_sigue_yendo_a_saludo():
     assert decidir_ruta(_estado(intencion="saludo")) == "saludo"
+
+
+def test_quien_no_esta_identificado_y_manda_su_dni_va_al_ejecutor():
+    """Aunque el intake lo clasifique como trámite, que se deriva directo."""
+    from app.agents.graph import decidir_ruta
+
+    estado = {
+        "mensaje": "Laura Prueba, 30.111.291",
+        "intencion": "tramite",
+        "confianza": 0.9,
+        "requiere_escalado": False,
+        "ciudadano_id": "c1",
+        "identificado": False,
+    }
+    assert decidir_ruta(estado) == "ejecutor"
+    # Ya identificado, un trámite sigue derivándose.
+    assert decidir_ruta({**estado, "identificado": True}) == "escalado"
+

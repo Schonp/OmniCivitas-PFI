@@ -156,3 +156,38 @@ async def test_grafo_escala_cuando_se_agotan_las_repreguntas(db_session, ciudada
     )
     escalados = [a for a in auditorias if a.accion == "escalado"]
     assert escalados and escalados[0].metadata_["resumen"] == "Resumen para operador"
+
+
+async def test_si_el_modelo_falla_el_caso_se_deriva_y_el_ciudadano_recibe_respuesta(
+    db_session, ciudadano, mocker
+):
+    """RNF-03: con el servidor del modelo caído, la excepción subía hasta el
+    webhook y el mensaje del ciudadano se perdía sin respuesta."""
+    caido = MagicMock()
+    caido.with_structured_output.return_value.ainvoke = AsyncMock(
+        side_effect=RuntimeError("llama-server process has terminated")
+    )
+    caido.ainvoke = AsyncMock(side_effect=RuntimeError("llama-server process has terminated"))
+    mocker.patch("app.agents.llm.get_llm_intake", return_value=caido)
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=caido)
+
+    final = await procesar_mensaje(
+        db_session,
+        mensaje="Hay un pozo en Thames 1200",
+        canal=Canal.email,
+        identificador=ciudadano.email,
+        checkpointer=InMemorySaver(),
+    )
+
+    assert MOTIVO_EN_CRIOLLO["falla_tecnica"] in final["respuesta"]
+    assert final["requiere_escalado"] is True
+    caso = await db_session.get(Caso, uuid.UUID(final["caso_id"]))
+    assert caso.estado in (EstadoCaso.escalado, EstadoCaso.en_progreso)
+    # Sin el resumen del modelo, el operador recibe el mensaje original.
+    assert caso.resumen_ia == "Hay un pozo en Thames 1200"
+    motivos = (
+        await db_session.execute(
+            select(Auditoria.metadata_).where(Auditoria.caso_id == caso.id, Auditoria.accion == "escalado")
+        )
+    ).scalars().all()
+    assert motivos and motivos[0]["motivo"] == "falla_tecnica"

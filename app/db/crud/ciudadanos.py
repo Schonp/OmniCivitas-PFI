@@ -1,10 +1,10 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_lookup_str
-from app.db.models import Ciudadano
+from app.db.models import Caso, Ciudadano
 from app.schemas.ciudadano import CiudadanoCreate
 
 # `ciudadanos.documento` es obligatorio y unico, pero en el primer contacto por
@@ -79,6 +79,12 @@ async def identificar_ciudadano(
         # vuelve ambigua.
         ciudadano.email = None
         ciudadano.telefono = None
+        # Lo que escribió antes de identificarse (el caso que se abrió en el
+        # primer contacto) es suyo: si queda en el registro provisorio, que ya
+        # no es alcanzable por ningún canal, nadie vuelve a encontrarlo.
+        await db.execute(
+            update(Caso).where(Caso.ciudadano_id == ciudadano.id).values(ciudadano_id=existente.id)
+        )
         await db.flush()
         return existente
 
