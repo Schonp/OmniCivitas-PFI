@@ -85,6 +85,7 @@ export interface DocumentoConocimiento {
   titulo: string;
   contenido: string;
   nombre_archivo: string | null;
+  general: boolean;
   created_at: string;
 }
 

@@ -12,7 +12,7 @@ from app.db.crud.ciudadanos import (
     obtener_ciudadano_por_email,
     obtener_ciudadano_por_telefono,
 )
-from app.db.crud.conocimiento import buscar_documentos_relevantes
+from app.db.crud.conocimiento import buscar_documentos_relevantes, listar_pautas_generales
 from app.db.crud.interacciones import (
     listar_interacciones_de_caso,
     ultimo_mensaje_al_ciudadano,
@@ -63,6 +63,7 @@ async def nodo_contexto(state: AgentState, db: AsyncSession) -> dict:
             "en_manos_humanas": False,
             "historial": [],
             "conocimiento": [],
+            "pautas": await listar_pautas_generales(db),
         }
 
     # Un tema nuevo no se pega al caso abierto ni hereda su historial: el
@@ -131,4 +132,5 @@ async def nodo_contexto(state: AgentState, db: AsyncSession) -> dict:
         "en_manos_humanas": en_manos_humanas,
         "historial": historial,
         "conocimiento": conocimiento,
+        "pautas": await listar_pautas_generales(db),
     }

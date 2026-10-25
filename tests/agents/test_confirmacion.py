@@ -128,3 +128,49 @@ def test_un_numero_que_no_dijo_tambien_cuenta():
 
     assert datos_inventados("Poste caído en Thames 1400", ["hay un poste caído en Thames"]) == ["1400"]
 
+
+# --- Estado de casos armado por código ---------------------------------------
+
+
+def test_estado_de_un_caso_con_su_numero():
+    from app.agents.confirmacion import estado_de_casos
+
+    texto = estado_de_casos(
+        {
+            "tiene_casos": True,
+            "varios_posibles": False,
+            "referencia": "REC-1A2B3C4D",
+            "tipo": "reclamo",
+            "estado": "abierto",
+            "de_que_trata": "Pozo en la calzada en Av. Rivadavia 3200",
+        },
+        Canal.email,
+    )
+
+    assert texto.startswith("Su reclamo por pozo en la calzada en Av. Rivadavia 3200 está registrado")
+    assert "Número de caso: REC-1A2B3C4D" in texto
+
+
+def test_estado_con_varios_casos_pregunta_cual():
+    from app.agents.confirmacion import estado_de_casos
+
+    texto = estado_de_casos(
+        {
+            "tiene_casos": True,
+            "varios_posibles": True,
+            "casos": [
+                {"referencia": "REC-1A2B3C4D", "de_que_trata": "Pozo en la calzada"},
+                {"referencia": "RES-9F8E7D6C", "de_que_trata": "Turno de DNI"},
+            ],
+        },
+        Canal.whatsapp,
+    )
+
+    assert "REC-1A2B3C4D" in texto and "RES-9F8E7D6C" in texto
+    assert texto.endswith("¿Por cuál me consulta?")
+
+
+def test_estado_sin_casos():
+    from app.agents.confirmacion import estado_de_casos
+
+    assert "No encontré otros casos" in estado_de_casos({"tiene_casos": False}, Canal.email)

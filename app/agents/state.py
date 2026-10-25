@@ -11,6 +11,8 @@ class AgentState(TypedDict):
     en_manos_humanas: bool
     historial: list[dict]
     conocimiento: list[str]
+    # Pautas generales del organismo: entran al ejecutor en todos los turnos.
+    pautas: list[str]
     intencion: Optional[str]
     continua_caso_abierto: bool
     entidades: dict

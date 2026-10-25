@@ -1,4 +1,5 @@
 from app.agents.contexto import buscar_conocimiento, nodo_contexto
+from app.db.crud.conocimiento import crear_documento
 from app.db.crud.interacciones import crear_interaccion
 from app.db.models import ActorInteraccion, Canal, Caso, EstadoCaso, TipoCaso
 
@@ -75,3 +76,24 @@ async def test_contexto_recupera_el_caso_derivado_a_un_operador(db_session, ciud
     )
 
     assert resultado["caso_id"] == str(caso.id)
+
+
+async def test_contexto_trae_las_pautas_generales(db_session, ciudadano):
+    """Las pautas llegan aunque el mensaje no las mencione."""
+    await crear_documento(
+        db_session, titulo="Trato", contenido="Tratar de usted.", general=True
+    )
+
+    resultado = await nodo_contexto(_estado("+5491122334455"), db_session)
+
+    assert resultado["pautas"] == ["Trato: Tratar de usted."]
+
+
+async def test_contexto_trae_las_pautas_aunque_no_reconozca_al_ciudadano(db_session):
+    await crear_documento(
+        db_session, titulo="Trato", contenido="Tratar de usted.", general=True
+    )
+
+    resultado = await nodo_contexto(_estado("+5490000000000"), db_session)
+
+    assert resultado["pautas"] == ["Trato: Tratar de usted."]

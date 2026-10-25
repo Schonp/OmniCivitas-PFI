@@ -41,6 +41,11 @@ async def crear_reclamo(
         )
         db.add(caso)
         await db.flush()
+    # La descripción es lo que identifica al reclamo cuando el ciudadano pregunta
+    # por él ("su reclamo por pozo en la calzada..."). Si el caso ya tenía
+    # asunto (el del correo, que escribió el propio ciudadano), se respeta.
+    if not caso.asunto:
+        caso.asunto = descripcion.strip()[:300]
 
     await registrar_auditoria(
         db,

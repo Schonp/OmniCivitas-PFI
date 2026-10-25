@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool, tool
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import llm
@@ -14,10 +15,11 @@ from app.agents.confirmacion import (
     agradecimiento,
     confirmacion,
     dia_en_palabras,
+    estado_de_casos,
     pedido_de_identificacion,
 )
 from app.agents.state import AgentState
-from app.db.models import ActorInteraccion, Canal
+from app.db.models import ActorInteraccion, Canal, Caso, TipoCaso
 from app.agents.contexto import obtener_ciudadano_por_canal
 from app.agents.eleccion import ETIQUETA_TIPO
 from app.agents.identidad import extraer_identidad
@@ -237,6 +239,33 @@ def _sin_identificadores_internos(texto: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lineas)).strip()
 
 
+_REFERENCIA = re.compile(r"\b(?:REC|RES|CON|TRA)-[0-9A-F]{8}\b", re.IGNORECASE)
+
+
+def sin_referencias_ajenas(texto: str, permitidas: set[str]) -> str:
+    """Quita las líneas con un número de caso que no es de este ciudadano.
+
+    En una prueba sobre el sistema completo, el modelo contestó una consulta
+    con "Número de caso: REC-20194FB3" cuando el caso real era REC-20194FB2: un
+    número que no existe, o que es de otra persona, no puede llegarle al
+    ciudadano. Las confirmaciones armadas por código siempre pasan.
+    """
+    permitidas = {referencia.upper() for referencia in permitidas}
+    lineas = [
+        linea
+        for linea in texto.splitlines()
+        if all(r.upper() in permitidas for r in _REFERENCIA.findall(linea))
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lineas)).strip()
+
+
+async def _referencias_del_ciudadano(db: AsyncSession, ciudadano_id: str | None) -> set[str]:
+    if not ciudadano_id:
+        return set()
+    casos = await db.execute(select(Caso).where(Caso.ciudadano_id == uuid.UUID(ciudadano_id)))
+    return {caso.referencia for caso in casos.scalars().all()}
+
+
 def _texto(mensaje: AIMessage) -> str:
     if isinstance(mensaje.content, str):
         return _sin_identificadores_internos(_sin_markdown(mensaje.content))
@@ -252,6 +281,7 @@ def prompt_del_sistema(
     canal: Canal,
     *,
     conocimiento: list[str] | None = None,
+    pautas: list[str] | None = None,
     origen_menu: str | None = None,
     identificado: bool = True,
     hoy: datetime | None = None,
@@ -267,6 +297,12 @@ def prompt_del_sistema(
     # Sin la fecha, "el jueves a las 10" no tiene cómo pasar a AAAA-MM-DD.
     partes = [SYSTEM_EJECUTOR, f"\n\nHoy es {dia_en_palabras(hoy)} de {hoy.year}."]
     partes.append(FORMATO_VOZ if canal == Canal.voz else FORMATO_TEXTO)
+    if pautas:
+        # Antes del pedido de identificación: una pauta como "en una emergencia,
+        # primero el número de emergencias" tiene que poder ir antes de pedir
+        # datos. Los controles que importan (sin DNI no hay gestión, nada de
+        # datos inventados) los aplica el código, así que una pauta no los saltea.
+        partes.append("\n\nPautas del organismo (valen para toda la conversación):\n" + "\n".join(pautas))
     if not identificado:
         # Mientras arrastre el documento provisorio del alta automática, el
         # organismo no sabe a nombre de quién gestionar: primero nombre y DNI.
@@ -318,6 +354,25 @@ def datos_inventados(descripcion: str, dichos_del_ciudadano: list[str]) -> list[
             continue
         faltantes.append(palabra)
     return faltantes
+
+
+def dni_dicho(documento: str, dichos_del_ciudadano: list[str]) -> bool:
+    """Si el DNI que propone el modelo aparece en lo que escribió el ciudadano.
+
+    Se comparan solo los dígitos: el ciudadano escribe "30.111.295" o "30111295"
+    y el modelo lo pasa sin puntos.
+    """
+    digitos = re.sub(r"\D", "", documento)
+    if len(digitos) < 7:
+        return False
+    # Cada número por separado: pegar todas las cifras del mensaje haría que una
+    # dirección y un teléfono juntos "contengan" un DNI que nadie escribió.
+    numeros = {
+        numero.replace(".", "")
+        for dicho in dichos_del_ciudadano
+        for numero in re.findall(r"\d[\d.]*", dicho)
+    }
+    return digitos in numeros
 
 
 _VUELVE_A_PEDIR_DATOS = re.compile(r"nombre completo|su DNI|número de documento", re.IGNORECASE)
@@ -376,8 +431,59 @@ async def _registrar_identidad_del_mensaje(
     return nuevo, (llamada, salida)
 
 
+async def _estado_al_sumar_contacto(
+    state: AgentState, db: AsyncSession, identidad: tuple[dict, dict]
+) -> dict | None:
+    """Quien preguntó por su caso desde un canal nuevo y recién ahí dio un DNI
+    que ya existía: su contacto se acaba de sumar a esa persona, y lo que quería
+    saber es el estado de sus casos.
+
+    Se responde acá y no con el modelo. En las pruebas sobre el sistema
+    completo, el modelo tomaba el "¿cómo va el reclamo del pozo?" del historial
+    como un reclamo nuevo: inventaba una dirección, el control la frenaba y el
+    caso terminaba derivado a un operador (caso funcional F5).
+    """
+    if not state.get("caso_id"):
+        return None
+    caso = await db.get(Caso, uuid.UUID(state["caso_id"]))
+    # Solo cuando la pregunta pendiente era una consulta: si había contado un
+    # reclamo o pedido un turno, eso lo sigue gestionando el modelo.
+    if caso is None or caso.tipo != TipoCaso.consulta:
+        return None
+    pregunta = " ".join(
+        e.get("contenido") or ""
+        for e in state.get("historial") or []
+        if e.get("actor") == ActorInteraccion.ciudadano.value
+    )
+    salida = await consultas.consultar_estado_caso(
+        db,
+        ciudadano_id=uuid.UUID(state["ciudadano_id"]),
+        referencia=pregunta or None,
+        excluir=caso.id,
+    )
+    # La unión de contactos queda hecha aunque la consulta no escriba nada.
+    await db.commit()
+    canal = Canal(state["canal"])
+    contacto = "este correo" if canal == Canal.email else "este número"
+    llamada, salida_identidad = identidad
+    return {
+        "resultado_ejecucion": {llamada["name"]: salida_identidad, "consultar_estado_caso": salida},
+        "caso_id": state["caso_id"],
+        "ciudadano_id": state["ciudadano_id"],
+        "identificado": True,
+        "respuesta": agradecimiento(salida_identidad)
+        + f"Ya sumé {contacto} a su registro.\n\n"
+        + estado_de_casos(salida, canal),
+    }
+
+
 async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
+    antes = state.get("ciudadano_id")
     state, identidad = await _registrar_identidad_del_mensaje(state, db)
+    if identidad and state.get("ciudadano_id") != antes:
+        resultado = await _estado_al_sumar_contacto(state, db, identidad)
+        if resultado is not None:
+            return resultado
     resultado = await _resolver(state, db, identidad)
     if state.get("recien_identificado"):
         resultado = {**resultado, "ciudadano_id": state["ciudadano_id"], "identificado": True}
@@ -392,6 +498,12 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
             nombre = (datos.get("nombre") or "").split()
             if nombre and nombre[0].lower() not in respuesta.lower():
                 resultado["respuesta"] = agradecimiento(datos) + respuesta
+    respuesta = resultado.get("respuesta")
+    if respuesta and _REFERENCIA.search(respuesta):
+        permitidas = await _referencias_del_ciudadano(
+            db, resultado.get("ciudadano_id") or state.get("ciudadano_id")
+        )
+        resultado = {**resultado, "respuesta": sin_referencias_ajenas(respuesta, permitidas)}
     return resultado
 
 
@@ -411,6 +523,7 @@ async def _resolver(
             content=prompt_del_sistema(
                 Canal(state["canal"]),
                 conocimiento=state.get("conocimiento"),
+                pautas=state.get("pautas"),
                 origen_menu=state.get("origen_menu"),
                 # Mismo criterio que `construir_tools` para ofrecer
                 # `registrar_identidad`: sin el dato, no está identificado.
@@ -478,12 +591,33 @@ async def _resolver(
                     ),
                 }
             herramienta = tools_por_nombre.get(tool_call["name"])
+            dichos = [state["mensaje"]] + [
+                e.get("contenido") or ""
+                for e in state.get("historial") or []
+                if e.get("actor") == ActorInteraccion.ciudadano.value
+            ]
+            if tool_call["name"] == "registrar_identidad" and not dni_dicho(
+                tool_call["args"].get("documento") or "", dichos
+            ):
+                # Pasó en una prueba: ante una mordedura, el modelo registró a
+                # un "Juan" que nadie nombró. Con un DNI inventado que fuera de
+                # otra persona, el contacto se sumaría a ella y vería sus casos.
+                logger.warning("ejecutor: registrar_identidad con un DNI que el ciudadano no dio")
+                mensajes.append(
+                    ToolMessage(
+                        content=json.dumps(
+                            {
+                                "error": "El ciudadano todavía no informó ese DNI. No lo "
+                                "inventes: pedile su nombre completo y su DNI."
+                            },
+                            ensure_ascii=False,
+                        ),
+                        tool_call_id=tool_call["id"],
+                    )
+                )
+                hubo_fallo = True
+                continue
             if tool_call["name"] == "crear_reclamo":
-                dichos = [state["mensaje"]] + [
-                    e.get("contenido") or ""
-                    for e in state.get("historial") or []
-                    if e.get("actor") == ActorInteraccion.ciudadano.value
-                ]
                 inventados = datos_inventados(tool_call["args"].get("descripcion") or "", dichos)
                 if inventados:
                     # No se ejecuta: el modelo recibe el motivo y pregunta en

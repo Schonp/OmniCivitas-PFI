@@ -330,3 +330,245 @@ def test_no_se_le_muestra_el_identificador_interno_del_caso():
         "Su reclamo está registrado.\n\nNúmero de caso: REC-1807DB61"
     )
 
+
+def test_las_pautas_del_organismo_van_antes_del_pedido_de_identificacion():
+    """Una pauta como "en una emergencia, primero el número de emergencias" tiene
+    que poder ir antes de pedir los datos. Con las pautas al final, el modelo
+    obedecía siempre la identificación y las ignoraba."""
+    from app.agents.ejecutor import (
+        INSTRUCCION_IDENTIFICACION,
+        SYSTEM_EJECUTOR,
+        prompt_del_sistema,
+    )
+    from app.db.models import Canal
+
+    sistema = prompt_del_sistema(
+        Canal.whatsapp, pautas=["Trato: Tratar de usted."], identificado=False
+    )
+
+    assert "Trato: Tratar de usted." in sistema
+    assert sistema.index(SYSTEM_EJECUTOR) < sistema.index("Trato: Tratar de usted.")
+    assert sistema.index("Trato: Tratar de usted.") < sistema.index(INSTRUCCION_IDENTIFICACION)
+
+
+def test_sin_pautas_el_prompt_no_cambia():
+    """El dataset de entrenamiento y la medición del modelo arman el prompt sin
+    pautas: tiene que ser el mismo texto de antes."""
+    from app.agents.ejecutor import prompt_del_sistema
+    from app.db.models import Canal
+
+    assert "Pautas del organismo" not in prompt_del_sistema(Canal.whatsapp)
+
+
+def test_dni_dicho_compara_solo_los_digitos():
+    from app.agents.ejecutor import dni_dicho
+
+    assert dni_dicho("30111295", ["Soy Laura, DNI 30.111.295"])
+    assert dni_dicho("30.111.295", ["laura 30111295"])
+    assert not dni_dicho("30111295", ["Me mordió un perro en la plaza"])
+
+
+def test_dni_dicho_no_arma_un_dni_pegando_cifras_sueltas():
+    """Una dirección y un número de casa juntos no son un DNI."""
+    from app.agents.ejecutor import dni_dicho
+
+    assert not dni_dicho("32001500", ["Rivadavia 3200, entre 1500 y 1600"])
+
+
+async def test_no_se_registra_una_identidad_que_el_ciudadano_no_dio(db_session, mocker):
+    """Pasó en una prueba con el modelo real: ante una mordedura, registró a un
+    "Juan" con un DNI que nadie escribió. Si ese DNI fuera de otra persona, el
+    contacto se le sumaría y vería sus casos."""
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+    from app.db.models import Ciudadano
+
+    ciudadano = Ciudadano(nombre="Sin nombre", documento="PROV-123", telefono="+5491100000077")
+    db_session.add(ciudadano)
+    await db_session.commit()
+
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        side_effect=[
+            _AI(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "registrar_identidad",
+                        "args": {"nombre_completo": "Juan Pérez", "documento": "30111295"},
+                        "id": "t1",
+                    }
+                ],
+            ),
+            _AI(content="Para registrarlo necesito su nombre completo y su DNI."),
+        ]
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+
+    estado = {
+        "mensaje": "Me mordió un perro suelto en la plaza",
+        "canal": "whatsapp",
+        "identificador": "+5491100000077",
+        "ciudadano_id": str(ciudadano.id),
+        "identificado": False,
+        "caso_id": None,
+        "historial": [],
+        "conocimiento": [],
+        "intencion": "reclamo",
+        "entidades": {},
+        "confianza": 0.9,
+        "resultado_ejecucion": None,
+        "requiere_escalado": False,
+        "motivo_escalado": None,
+        "respuesta": None,
+    }
+
+    resultado = await mod.nodo_ejecutor(estado, db_session)
+
+    await db_session.refresh(ciudadano)
+    assert ciudadano.documento == "PROV-123"
+    assert "registrar_identidad" not in (resultado.get("resultado_ejecucion") or {})
+
+
+async def _laura_por_whatsapp_y_correo_provisorio(db_session, tipo_pendiente):
+    """Laura ya existe por WhatsApp, con un reclamo; ahora escribe por correo
+    sin identificarse y queda un registro provisorio con un caso abierto."""
+    from app.db.models import Canal as _Canal
+    from app.db.models import Caso, Ciudadano, TipoCaso
+
+    laura = Ciudadano(nombre="Laura Prueba", documento="30111295", telefono="+5491100000095")
+    provisorio = Ciudadano(nombre="Laura", documento="PROV-F5", email="laura@correo.test")
+    db_session.add_all([laura, provisorio])
+    await db_session.flush()
+    reclamo = Caso(
+        ciudadano_id=laura.id,
+        tipo=TipoCaso.reclamo,
+        canal_origen=_Canal.whatsapp,
+        canal_actual=_Canal.whatsapp,
+        asunto="Pozo en la calzada en Av. Rivadavia 3200",
+    )
+    pendiente = Caso(
+        ciudadano_id=provisorio.id,
+        tipo=tipo_pendiente,
+        canal_origen=_Canal.email,
+        canal_actual=_Canal.email,
+    )
+    db_session.add_all([reclamo, pendiente])
+    await db_session.commit()
+    return laura, provisorio, reclamo, pendiente
+
+
+def _estado_f5(provisorio, pendiente, pregunta):
+    return {
+        "mensaje": "Soy Laura Prueba, DNI 30111295",
+        "canal": "email",
+        "identificador": "laura@correo.test",
+        "ciudadano_id": str(provisorio.id),
+        "identificado": False,
+        "caso_id": str(pendiente.id),
+        "historial": [{"actor": "ciudadano", "contenido": pregunta, "canal": "email"}],
+        "conocimiento": [],
+        "intencion": "tramite",
+        "entidades": {},
+        "confianza": 0.9,
+        "resultado_ejecucion": None,
+        "requiere_escalado": False,
+        "motivo_escalado": None,
+        "respuesta": None,
+    }
+
+
+async def test_quien_se_identifica_por_otro_canal_recibe_el_estado_de_su_caso(
+    db_session, mocker
+):
+    """Caso funcional F5. El modelo tomaba la pregunta del historial como un
+    reclamo nuevo, inventaba una dirección y el caso terminaba derivado."""
+    from app.agents import ejecutor as mod
+    from app.db.models import TipoCaso
+
+    laura, provisorio, reclamo, pendiente = await _laura_por_whatsapp_y_correo_provisorio(
+        db_session, TipoCaso.consulta
+    )
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(side_effect=AssertionError("no hace falta el modelo"))
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+
+    resultado = await mod.nodo_ejecutor(
+        _estado_f5(provisorio, pendiente, "¿Cómo va el reclamo del pozo?"), db_session
+    )
+
+    assert resultado["ciudadano_id"] == str(laura.id)
+    assert resultado["respuesta"].startswith("Gracias, Laura. Ya sumé este correo a su registro.")
+    assert reclamo.referencia in resultado["respuesta"]
+    assert "pozo" in resultado["respuesta"]
+    assert resultado.get("requiere_escalado") is not True
+
+
+async def test_si_lo_pendiente_era_un_reclamo_lo_sigue_gestionando_el_modelo(
+    db_session, mocker
+):
+    """Si por el canal nuevo contó un problema, eso es un reclamo para crear,
+    no una consulta de estado."""
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+    from app.db.models import TipoCaso
+
+    _, provisorio, _, pendiente = await _laura_por_whatsapp_y_correo_provisorio(
+        db_session, TipoCaso.reclamo
+    )
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(return_value=_AI(content="¿En qué calle está?"))
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+
+    await mod.nodo_ejecutor(
+        _estado_f5(provisorio, pendiente, "Hay un árbol caído en mi cuadra"), db_session
+    )
+
+    assert modelo.bind_tools.return_value.ainvoke.await_count == 1
+
+
+def test_se_quita_un_numero_de_caso_que_no_es_del_ciudadano():
+    """Pasó con el modelo real: "Número de caso: REC-20194FB3" con el caso real
+    REC-20194FB2."""
+    from app.agents.ejecutor import sin_referencias_ajenas
+
+    texto = "Lave la herida con agua y jabón.\n\nNúmero de caso: REC-20194FB3"
+
+    assert sin_referencias_ajenas(texto, {"REC-20194FB2"}) == "Lave la herida con agua y jabón."
+    assert sin_referencias_ajenas(texto, {"REC-20194FB3"}) == texto
+
+
+async def test_el_ejecutor_no_deja_pasar_un_numero_de_caso_inventado(db_session, mocker, ciudadano):
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        return_value=_AI(content="Lave la herida con agua y jabón.\n\nNúmero de caso: REC-ABCDEF12")
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+
+    estado = {
+        "mensaje": "Me mordió un perro, ¿qué hago?",
+        "canal": "whatsapp",
+        "identificador": "+5491122334455",
+        "ciudadano_id": str(ciudadano.id),
+        "identificado": True,
+        "caso_id": None,
+        "historial": [],
+        "conocimiento": [],
+        "intencion": "consulta",
+        "entidades": {},
+        "confianza": 0.9,
+        "resultado_ejecucion": None,
+        "requiere_escalado": False,
+        "motivo_escalado": None,
+        "respuesta": None,
+    }
+
+    resultado = await mod.nodo_ejecutor(estado, db_session)
+
+    assert resultado["respuesta"] == "Lave la herida con agua y jabón."

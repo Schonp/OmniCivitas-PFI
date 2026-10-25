@@ -9,8 +9,10 @@ import pytest
 
 from app.db.crud.conocimiento import (
     MAX_DOCUMENTOS_CONTEXTO,
+    MAX_PAUTAS_GENERALES,
     buscar_documentos_relevantes,
     crear_documento,
+    listar_pautas_generales,
     palabras_significativas,
 )
 
@@ -129,3 +131,44 @@ async def test_mensajes_sin_palabras_utiles(db_session, mensaje):
     await crear_documento(db_session, titulo="Sedes", contenido="Atención de 8 a 15.")
 
     assert await buscar_documentos_relevantes(db_session, mensaje) == []
+
+
+# --- Pautas generales --------------------------------------------------------
+
+
+async def test_las_pautas_generales_no_compiten_en_la_busqueda(db_session):
+    """Una pauta ya entra en todos los prompts: si además se recuperara por
+    relevancia, le quitaría el lugar a un documento que responde la consulta."""
+    await crear_documento(
+        db_session,
+        titulo="Trato con el ciudadano",
+        contenido="Tratar de usted. No prometer plazos de la licencia que no figuren.",
+        general=True,
+    )
+    await crear_documento(
+        db_session,
+        titulo="Renovar la licencia de conducir",
+        contenido="Licencia anterior y DNI vigente.",
+    )
+
+    titulos = _titulos(await buscar_documentos_relevantes(db_session, "renovar licencia"))
+
+    assert titulos == ["Renovar la licencia de conducir"]
+
+
+async def test_listar_pautas_generales_trae_solo_las_generales(db_session):
+    await crear_documento(
+        db_session, titulo="Trato", contenido="Tratar de usted.", general=True
+    )
+    await crear_documento(db_session, titulo="Sedes", contenido="Atención de 8 a 15.")
+
+    assert await listar_pautas_generales(db_session) == ["Trato: Tratar de usted."]
+
+
+async def test_respeta_el_tope_de_pautas_generales(db_session):
+    for i in range(MAX_PAUTAS_GENERALES + 2):
+        await crear_documento(
+            db_session, titulo=f"Pauta {i}", contenido="Contenido.", general=True
+        )
+
+    assert len(await listar_pautas_generales(db_session)) == MAX_PAUTAS_GENERALES

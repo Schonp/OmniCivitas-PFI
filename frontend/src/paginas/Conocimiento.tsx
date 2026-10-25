@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { AlertCircle, BookOpen, FileText, Trash2, Upload } from "lucide-react";
+import { AlertCircle, BookOpen, FileText, Sparkles, Trash2, Upload } from "lucide-react";
 
 import { useAuth } from "../auth";
 import { borrarDocumento, crearDocumento, listarDocumentos } from "../lib/conocimiento";
@@ -17,6 +17,7 @@ export function Conocimiento() {
   const [titulo, setTitulo] = useState("");
   const [contenido, setContenido] = useState("");
   const [nombreArchivo, setNombreArchivo] = useState<string | null>(null);
+  const [general, setGeneral] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -64,10 +65,12 @@ export function Conocimiento() {
         titulo: titulo.trim(),
         contenido: contenido.trim(),
         nombre_archivo: nombreArchivo ?? undefined,
+        general,
       });
       setTitulo("");
       setContenido("");
       setNombreArchivo(null);
+      setGeneral(false);
       if (inputArchivo.current) {
         inputArchivo.current.value = "";
       }
@@ -94,7 +97,8 @@ export function Conocimiento() {
         <h2 className="text-xl font-semibold text-slate-900">Base de conocimiento</h2>
         <p className="text-sm text-slate-600">
           Información del organismo (trámites, requisitos, horarios) que la IA usa como
-          contexto para responder consultas de los ciudadanos.
+          contexto para responder consultas de los ciudadanos, y pautas generales que
+          definen cómo atiende en todas las conversaciones.
         </p>
       </div>
 
@@ -138,6 +142,19 @@ export function Conocimiento() {
                 placeholder="Pegue el texto acá, o cargue un archivo .txt / .md con el botón de abajo."
                 className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-institucional-500 focus:ring-2 focus:ring-institucional-100"
               />
+            </label>
+
+            <label className="flex items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={general}
+                onChange={(evento) => setGeneral(evento.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-institucional-600 focus:ring-institucional-500"
+              />
+              <span>
+                <span className="font-medium">Pauta general.</span> La IA la aplica en todas
+                las conversaciones, no solo cuando el mensaje del ciudadano menciona el tema.
+              </span>
             </label>
 
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -194,6 +211,12 @@ export function Conocimiento() {
               <div>
                 <h3 className="font-semibold text-slate-900">{documento.titulo}</h3>
                 <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  {documento.general && (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-institucional-50 px-1.5 py-0.5 font-medium text-institucional-700">
+                      <Sparkles size={11} aria-hidden />
+                      Pauta general
+                    </span>
+                  )}
                   {documento.nombre_archivo && (
                     <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 font-medium text-slate-700">
                       <FileText size={11} aria-hidden />

@@ -68,3 +68,20 @@ async def test_intencion_reserva_agrega_turnos_disponibles(db_session):
     fragmentos = await buscar_conocimiento(db_session, "reserva", "quiero un turno")
 
     assert any("Turnos disponibles" in f and "Renovación de DNI" in f for f in fragmentos)
+
+
+async def test_se_puede_cargar_una_pauta_general(client, auth_headers):
+    creado = await client.post(
+        "/api/conocimiento",
+        json={"titulo": "Trato con el ciudadano", "contenido": "Tratar de usted.", "general": True},
+        headers=auth_headers,
+    )
+    sin_marcar = await client.post(
+        "/api/conocimiento",
+        json={"titulo": "Sedes", "contenido": "Atención de 8 a 15."},
+        headers=auth_headers,
+    )
+
+    assert creado.json()["general"] is True
+    # Lo que se cargaba antes, sin el campo, sigue siendo información común.
+    assert sin_marcar.json()["general"] is False

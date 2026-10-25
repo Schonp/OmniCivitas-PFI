@@ -108,3 +108,44 @@ def agradecimiento(salida_identidad: dict) -> str:
     """Prefijo cuando el ciudadano se identificó en el mismo mensaje."""
     nombre = (salida_identidad.get("nombre") or "").split()
     return f"Gracias, {nombre[0].capitalize()}. " if nombre else "Gracias. "
+
+
+TIPO_EN_PALABRAS = {
+    "reclamo": "Su reclamo",
+    "reserva": "Su turno",
+    "consulta": "Su consulta",
+    "tramite": "Su trámite",
+}
+ESTADO_EN_PALABRAS = {
+    "abierto": "está registrado y pendiente de que el área lo tome",
+    "en_progreso": "está en curso",
+    "escalado": "lo está atendiendo una persona del equipo",
+    "cerrado": "ya está cerrado",
+}
+
+
+def _de_que_trata(caso: dict) -> str:
+    texto = _descap(caso.get("de_que_trata") or "")
+    return texto if len(texto) <= 90 else texto[:87].rstrip() + "…"
+
+
+def estado_de_casos(salida: dict, canal: Canal) -> str:
+    """El estado de los casos que devolvió `consultar_estado_caso`, armado con
+    los datos reales, para cuando no se le deja la respuesta al modelo."""
+    voz = canal == Canal.voz
+    if not salida.get("tiene_casos"):
+        return "No encontré otros casos a su nombre. ¿En qué lo puedo ayudar?"
+    if salida.get("varios_posibles"):
+        casos = salida.get("casos") or []
+        if voz:
+            lista = "; ".join(f"{c['referencia']}, por {_de_que_trata(c)}" for c in casos)
+            return f"Tiene {len(casos)} casos a su nombre: {lista}. ¿Por cuál me consulta?"
+        lineas = [f"- {c['referencia']}: {_de_que_trata(c)}" for c in casos]
+        return "Encontré estos casos a su nombre:\n" + "\n".join(lineas) + "\n\n¿Por cuál me consulta?"
+    tipo = TIPO_EN_PALABRAS.get(salida.get("tipo", ""), "Su caso")
+    sobre = f" por {_de_que_trata(salida)}" if salida.get("de_que_trata") else ""
+    estado = ESTADO_EN_PALABRAS.get(salida.get("estado", ""), "está registrado")
+    referencia = salida.get("referencia", "")
+    if voz:
+        return f"{tipo}{sobre} {estado}. El número de caso es {referencia}."
+    return f"{tipo}{sobre} {estado}.\n\nNúmero de caso: {referencia}"

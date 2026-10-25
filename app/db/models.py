@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, ForeignKey, JSON, String, Text, false, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 from sqlalchemy.types import TypeDecorator
@@ -253,6 +253,10 @@ class DocumentoConocimiento(Base):
     contenido: Mapped[str] = mapped_column(Text)
     # Nombre del archivo original si se cargó por archivo; None si fue texto directo.
     nombre_archivo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Pauta general: una instrucción de comportamiento que el ejecutor recibe en
+    # todas las conversaciones, no solo cuando el mensaje la menciona. El resto
+    # de los documentos se recupera por relevancia.
+    general: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

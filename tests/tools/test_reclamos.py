@@ -105,3 +105,17 @@ async def test_crear_reclamo_no_reusa_un_caso_de_otro_tipo(db_session, ciudadano
 
     caso_nuevo = await db_session.get(Caso, uuid.UUID(resultado["caso_id"]))
     assert caso_nuevo.tipo == TipoCaso.reclamo
+
+
+async def test_la_descripcion_queda_como_asunto_del_caso(db_session, ciudadano):
+    """Es lo que identifica al reclamo cuando el ciudadano pregunta por él."""
+    salida = await crear_reclamo(
+        db_session,
+        ciudadano_id=ciudadano.id,
+        canal=Canal.whatsapp,
+        descripcion="Pozo en la calzada en Av. Rivadavia 3200",
+        categoria="infraestructura",
+    )
+
+    caso = await db_session.get(Caso, uuid.UUID(salida["caso_id"]))
+    assert caso.asunto == "Pozo en la calzada en Av. Rivadavia 3200"

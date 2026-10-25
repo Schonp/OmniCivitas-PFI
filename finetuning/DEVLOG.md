@@ -794,9 +794,44 @@ identidad y crea el reclamo en el mismo turno (la identidad corre primero
 aunque venga después en la respuesta), y la confirmación arranca con
 "Gracias, Marta.". Verificado en la conversación real: 3 a 5 s por turno.
 
+### Pautas generales en la base de conocimiento
+
+Los documentos de la base pueden marcarse como pauta general: entran al prompt
+del ejecutor en todos los turnos, sin pasar por la búsqueda léxica (como las
+skills de comportamiento general de un agente). Ejemplos en `conocimiento/`,
+en texto plano porque es lo más barato de leer para el modelo.
+
+Con el grafo completo y el modelo v2, el efecto es limitado. Con las pautas al
+final del prompt y la consigna "sin contradecir las reglas anteriores", el
+modelo seguía siempre la instrucción de identificación y nunca daba el número
+de emergencias. Pasarlas antes del pedido de identificación no alcanzó: el
+modelo aprendió a pedir nombre y DNI primero y el dataset no tiene pautas. Se
+dejan antes de la identificación igual, porque los controles que importan están
+en el código.
+
+La misma corrida destapó algo peor: ante "me mordió un perro", el modelo llamó
+a `registrar_identidad` con un "Juan" y un DNI que nadie escribió. Si ese DNI
+fuera de otra persona, el contacto se le sumaría y vería sus casos. Arreglo en
+código: el DNI solo se registra si aparece, como número, en lo que escribió el
+ciudadano (`dni_dicho`).
+
+F5 (identificarse por correo con un DNI existente) salía distinto según la
+corrida: el contacto se sumaba bien y no se duplicaba el reclamo, pero el modelo
+intentaba registrar el pozo otra vez con una dirección inventada y, bloqueado,
+derivaba. Arreglo en código: si el contacto se suma a una persona que ya existe
+y el caso pendiente es una consulta, el estado se responde sin el modelo
+(`_estado_al_sumar_contacto`, `confirmacion.estado_de_casos`). Para que esa
+respuesta diga de qué se trata, `crear_reclamo` deja la descripción como asunto
+del caso cuando no tenía uno.
+
+En la misma corrida el modelo escribió "Número de caso: REC-20194FB3" con el
+caso real REC-20194FB2. Se quitan de la respuesta las líneas con un número de
+caso que no es del ciudadano (`sin_referencias_ajenas`).
+
 ### Qué queda
 
 - [ ] Si se vuelve a entrenar: más conversaciones de identificación que pidan
       los datos primero, para que el modelo lo haga solo y la regla del código
       quede como red de seguridad.
-
+- [ ] Sumar conversaciones con pautas generales al dataset, para que el modelo
+      las aplique (hoy antepone el pedido de identificación).

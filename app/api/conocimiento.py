@@ -35,6 +35,7 @@ async def crear(
         titulo=datos.titulo,
         contenido=datos.contenido,
         nombre_archivo=datos.nombre_archivo,
+        general=datos.general,
     )
     return DocumentoOut.model_validate(documento)
 

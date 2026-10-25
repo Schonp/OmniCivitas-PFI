@@ -9,6 +9,7 @@ export async function crearDocumento(datos: {
   titulo: string;
   contenido: string;
   nombre_archivo?: string;
+  general?: boolean;
 }): Promise<DocumentoConocimiento> {
   return request<DocumentoConocimiento>("/api/conocimiento", {
     method: "POST",

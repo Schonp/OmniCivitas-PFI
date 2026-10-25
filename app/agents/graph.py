@@ -219,6 +219,7 @@ def _estado_inicial(mensaje: str, canal: Canal, identificador: str) -> AgentStat
         "en_manos_humanas": False,
         "historial": [],
         "conocimiento": [],
+        "pautas": [],
         "intencion": None,
         "continua_caso_abierto": True,
         "entidades": {},

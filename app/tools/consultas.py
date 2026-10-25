@@ -58,7 +58,11 @@ def _caso_a_dict(caso: Caso, primer_mensaje: str | None) -> dict:
 
 
 async def consultar_estado_caso(
-    db: AsyncSession, *, ciudadano_id: uuid.UUID, referencia: str | None = None
+    db: AsyncSession,
+    *,
+    ciudadano_id: uuid.UUID,
+    referencia: str | None = None,
+    excluir: uuid.UUID | None = None,
 ) -> dict:
     """Busca el caso del ciudadano que coincide con `referencia` —su número o
     unas palabras de lo que escribió— en su historial reciente. Sin pista y
@@ -69,12 +73,17 @@ async def consultar_estado_caso(
     trataba: un ciudadano con un reclamo viejo y una reserva nueva, preguntando
     por el reclamo, recibía el estado de la reserva y una respuesta segura de
     que estaba equivocado ("lo más reciente es una reserva, no un reclamo").
+
+    `excluir` deja afuera el caso de la propia pregunta: el que se abrió con
+    "¿cómo va mi reclamo?" coincide por tema con el reclamo que se busca.
     """
+    consulta = select(Caso).where(Caso.ciudadano_id == ciudadano_id)
+    if excluir is not None:
+        consulta = consulta.where(Caso.id != excluir)
     todos = list(
         (
             await db.execute(
-                select(Caso)
-                .where(Caso.ciudadano_id == ciudadano_id)
+                consulta
                 .order_by(Caso.updated_at.desc())
                 .limit(LIMITE_HISTORIAL)
             )

@@ -8,6 +8,9 @@ from app.db.models import DocumentoConocimiento
 # Tamaño del fragmento que entra al contexto del LLM por documento.
 MAX_CARACTERES_FRAGMENTO = 1500
 MAX_DOCUMENTOS_CONTEXTO = 3
+# Las pautas generales entran en todos los prompts del ejecutor: un tope evita
+# que una base con muchas pautas se coma la ventana de contexto del modelo.
+MAX_PAUTAS_GENERALES = 4
 MIN_LARGO_PALABRA = 4
 
 # Una coincidencia en el título dice mucho más que una en el cuerpo: el título
@@ -72,10 +75,15 @@ async def listar_documentos(db: AsyncSession) -> list[DocumentoConocimiento]:
 
 
 async def crear_documento(
-    db: AsyncSession, *, titulo: str, contenido: str, nombre_archivo: str | None = None
+    db: AsyncSession,
+    *,
+    titulo: str,
+    contenido: str,
+    nombre_archivo: str | None = None,
+    general: bool = False,
 ) -> DocumentoConocimiento:
     documento = DocumentoConocimiento(
-        titulo=titulo, contenido=contenido, nombre_archivo=nombre_archivo
+        titulo=titulo, contenido=contenido, nombre_archivo=nombre_archivo, general=general
     )
     db.add(documento)
     await db.commit()
@@ -123,11 +131,30 @@ async def buscar_documentos_relevantes(db: AsyncSession, mensaje: str) -> list[s
 
     consulta = (
         select(DocumentoConocimiento)
+        # Las pautas generales ya entran siempre (listar_pautas_generales): si
+        # compitieran acá, ocuparían un lugar de los MAX_DOCUMENTOS_CONTEXTO.
+        .where(DocumentoConocimiento.general.is_(False))
         .where(puntaje > 0)
         # A igual puntaje gana el más reciente: si el organismo recargó un tema,
         # la versión nueva es la que vale.
         .order_by(puntaje.desc(), DocumentoConocimiento.created_at.desc())
         .limit(MAX_DOCUMENTOS_CONTEXTO)
+    )
+    documentos = (await db.execute(consulta)).scalars().all()
+    return [
+        f"{documento.titulo}: {documento.contenido[:MAX_CARACTERES_FRAGMENTO]}"
+        for documento in documentos
+    ]
+
+
+async def listar_pautas_generales(db: AsyncSession) -> list[str]:
+    """Pautas de comportamiento que el ejecutor recibe en todas las
+    conversaciones, en el orden en que se cargaron."""
+    consulta = (
+        select(DocumentoConocimiento)
+        .where(DocumentoConocimiento.general.is_(True))
+        .order_by(DocumentoConocimiento.created_at)
+        .limit(MAX_PAUTAS_GENERALES)
     )
     documentos = (await db.execute(consulta)).scalars().all()
     return [

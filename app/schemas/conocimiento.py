@@ -8,6 +8,7 @@ class DocumentoCreate(BaseModel):
     titulo: str = Field(min_length=1, max_length=200)
     contenido: str = Field(min_length=1, max_length=50_000)
     nombre_archivo: str | None = Field(default=None, max_length=255)
+    general: bool = False
 
 
 class DocumentoOut(BaseModel):
@@ -17,4 +18,5 @@ class DocumentoOut(BaseModel):
     titulo: str
     contenido: str
     nombre_archivo: str | None
+    general: bool
     created_at: datetime
