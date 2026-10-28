@@ -57,7 +57,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.agents.ejecutor import construir_tools, prompt_del_sistema
-from scripts.seed_conocimiento import CARPETA_CONOCIMIENTO, leer_carpeta
+from scripts.archivos_conocimiento import CARPETA_CONOCIMIENTO, leer_carpeta
 from app.agents.intake import SYSTEM_INTAKE, _formatear_historial
 from app.agents.llm import a_formato_qwen
 from app.db.models import Canal

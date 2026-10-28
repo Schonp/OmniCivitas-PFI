@@ -29,12 +29,12 @@ contenido contengan **alguna** de ellas. Eso impone dos reglas de redacción:
 """
 
 import asyncio
-from pathlib import Path
 
 from sqlalchemy import select
 
 from app.db.models import DocumentoConocimiento
 from app.db.session import async_session_factory
+from scripts.archivos_conocimiento import CARPETA_CONOCIMIENTO, leer_carpeta
 
 # (título, contenido). El contenido arranca por el dato duro: si algún día se
 # recorta por MAX_CARACTERES_FRAGMENTO, lo primero es lo que sobrevive.
@@ -156,18 +156,6 @@ DOCUMENTOS: list[tuple[str, str]] = [
         "sin movimiento durante 30 días se cierra y admite reapertura.",
     ),
 ]
-
-
-CARPETA_CONOCIMIENTO = Path(__file__).resolve().parent.parent / "conocimiento"
-
-
-def leer_carpeta(carpeta: Path) -> list[tuple[str, str, str]]:
-    """(título, contenido, nombre de archivo) de cada .txt de la carpeta."""
-    documentos = []
-    for archivo in sorted(carpeta.glob("*.txt")):
-        titulo, _, contenido = archivo.read_text(encoding="utf-8").partition("\n")
-        documentos.append((titulo.strip(), contenido.strip(), archivo.name))
-    return documentos
 
 
 async def cargar() -> None:
