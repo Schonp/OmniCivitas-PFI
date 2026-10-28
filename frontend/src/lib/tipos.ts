@@ -65,19 +65,51 @@ export interface Caso {
   updated_at: string;
 }
 
+export type EstadoReserva = "confirmada" | "cancelada" | "atendida" | "ausente";
+
+export const ETIQUETA_ESTADO_RESERVA: Record<EstadoReserva, string> = {
+  confirmada: "Confirmado",
+  cancelada: "Cancelado",
+  atendida: "Atendido",
+  ausente: "Ausente",
+};
+
 export interface Reserva {
   id: string;
   caso_id: string;
+  referencia: string;
   ciudadano: CiudadanoResumen;
   fecha_hora: string;
+  estado: EstadoReserva;
+  motivo_cancelacion: string | null;
+  cancelada_en: string | null;
+  recordatorio_enviado_en: string | null;
   created_at: string;
+}
+
+export interface DiaBloqueado {
+  id: string;
+  turno_id: string | null;
+  fecha: string;
+  motivo: string;
 }
 
 export interface Turno {
   id: string;
   nombre: string;
   descripcion: string;
+  sede: string | null;
+  dias_atencion: number[];
+  hora_apertura: string;
+  hora_cierre: string;
+  duracion_minutos: number;
+  cupos_por_horario: number;
+  anticipacion_maxima_dias: number;
+  horario: string;
+  capacidad: number;
+  ocupados: number;
   reservas: Reserva[];
+  bloqueos: DiaBloqueado[];
 }
 
 export interface DocumentoConocimiento {

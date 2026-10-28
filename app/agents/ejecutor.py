@@ -11,11 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import llm
+from app.agents.cancelacion import atender_turno
+from app.agents.fechas import fecha_hora_dicha
 from app.agents.confirmacion import (
     agradecimiento,
     confirmacion,
     dia_en_palabras,
     estado_de_casos,
+    horario_no_disponible,
+    pedido_de_dia_y_hora,
     pedido_de_identificacion,
 )
 from app.agents.state import AgentState
@@ -24,6 +28,8 @@ from app.agents.contexto import obtener_ciudadano_por_canal
 from app.agents.eleccion import ETIQUETA_TIPO
 from app.agents.identidad import extraer_identidad
 from app.db.crud import ciudadanos
+from app.db.crud.turnos import ReservaNoDisponible, ahora_local, listar_agendas
+from app.db.models import Turno
 from app.tools import consultas, reclamos, reservas
 from app.tools.reclamos import CategoriaReclamo
 
@@ -356,6 +362,106 @@ def datos_inventados(descripcion: str, dichos_del_ciudadano: list[str]) -> list[
     return faltantes
 
 
+# Palabras de los nombres de agenda que no distinguen una de otra.
+_GENERICAS_DE_AGENDA = {
+    "de", "del", "la", "el", "en", "y", "para", "turno", "turnos", "centro",
+    "atencion", "renovacion",
+}
+_MESES = "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre"
+_DIA_DICHO = re.compile(
+    r"\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo|hoy|manana|pasado)\b"
+    r"|\b\d{1,2}\s*/\s*\d{1,2}\b"
+    rf"|\b\d{{1,2}}\s+de\s+({_MESES})\b"
+)
+
+
+def _normalizado(texto: str) -> str:
+    return texto.lower().translate(str.maketrans("áéíóúüñ", "aeiouun"))
+
+
+def agenda_nombrada(agendas: list[Turno], dichos_del_ciudadano: list[str]) -> Turno | None:
+    """La agenda que nombró el ciudadano ("licencia", "DNI", "CeSAC"), si nombró
+    exactamente una.
+
+    En una prueba con el modelo real, el ciudadano pidió turno para la licencia
+    y el modelo reservó en el centro de salud: el nombre de la agenda lo copia
+    de una lista, y se equivoca de renglón. Lo que el ciudadano dijo manda.
+    """
+    dicho = set(re.findall(r"\w+", _normalizado(" ".join(dichos_del_ciudadano))))
+    nombradas = [
+        agenda
+        for agenda in agendas
+        if dicho
+        & {
+            palabra
+            for palabra in re.findall(r"\w+", _normalizado(agenda.nombre))
+            if len(palabra) >= 3 and palabra not in _GENERICAS_DE_AGENDA
+        }
+    ]
+    return nombradas[0] if len(nombradas) == 1 else None
+
+
+def dijo_un_dia(dichos_del_ciudadano: list[str]) -> bool:
+    """Si el ciudadano nombró un día ("el jueves", "mañana", "5/11", "5 de
+    noviembre"). Sin eso, la fecha de la reserva la inventó el modelo."""
+    return bool(_DIA_DICHO.search(_normalizado(" ".join(dichos_del_ciudadano))))
+
+
+# Lo que el modelo afirma haber hecho, para comparar con lo que hizo.
+_CONFIRMA_RESERVA = re.compile(r"\breservé\b|\bqued[oó] reservad[oa]\b", re.IGNORECASE)
+_CONFIRMA_RECLAMO = re.compile(
+    r"\bregistré (su|el) reclamo\b|\breclamo qued[oó] registrado\b", re.IGNORECASE
+)
+NO_QUEDO_RESERVADO = "Todavía no quedó reservado. ¿Me confirma el trámite, el día y la hora?"
+NO_QUEDO_REGISTRADO = "Todavía no registré su reclamo. ¿Me cuenta qué pasó y en qué dirección?"
+
+
+def ultima_fecha_hora_dicha(mensajes_del_ciudadano: list[str]) -> str | None:
+    """El día y la hora del mensaje más reciente que los trae, en el formato
+    de la herramienta. `mensajes_del_ciudadano` va del más nuevo al más viejo."""
+    ahora = ahora_local()
+    for mensaje in mensajes_del_ciudadano:
+        momento = fecha_hora_dicha(mensaje, ahora)
+        if momento is not None:
+            return momento.strftime(reservas.FORMATO_FECHA_HORA)
+    return None
+
+
+async def _sin_confirmaciones_inventadas(
+    respuesta: AIMessage, db: AsyncSession, resultado_ejecucion: dict, dichos: list[str]
+) -> AIMessage | str | None:
+    """Si el modelo dice haber reservado o registrado algo que no hizo.
+
+    Pasó con el modelo real: "Le reservé el turno de Licencia de conducir por
+    primera vez", sin llamar a ninguna herramienta y con una agenda que no
+    existe. Si lo que pidió el ciudadano alcanza para reservar (una agenda
+    nombrada y un día y una hora), se hace la reserva de verdad con esos datos;
+    si no, se le dice que todavía no quedó hecho. None si no hay nada que
+    corregir.
+    """
+    texto = _texto(respuesta)
+    if _CONFIRMA_RESERVA.search(texto) and "crear_reserva" not in resultado_ejecucion:
+        agenda = agenda_nombrada(await listar_agendas(db), dichos)
+        fecha_hora = ultima_fecha_hora_dicha(dichos)
+        logger.warning("ejecutor: el modelo confirmó una reserva que no hizo")
+        if agenda is None or fecha_hora is None:
+            return NO_QUEDO_RESERVADO
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "crear_reserva",
+                    "args": {"turno": agenda.nombre, "fecha_hora": fecha_hora},
+                    "id": "reserva_pedida_por_el_ciudadano",
+                }
+            ],
+        )
+    if _CONFIRMA_RECLAMO.search(texto) and "crear_reclamo" not in resultado_ejecucion:
+        logger.warning("ejecutor: el modelo confirmó un reclamo que no registró")
+        return NO_QUEDO_REGISTRADO
+    return None
+
+
 def dni_dicho(documento: str, dichos_del_ciudadano: list[str]) -> bool:
     """Si el DNI que propone el modelo aparece en lo que escribió el ciudadano.
 
@@ -478,6 +584,9 @@ async def _estado_al_sumar_contacto(
 
 
 async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
+    gestion = await atender_turno(state, db)
+    if gestion is not None:
+        return gestion
     antes = state.get("ciudadano_id")
     state, identidad = await _registrar_identidad_del_mensaje(state, db)
     if identidad and state.get("ciudadano_id") != antes:
@@ -550,8 +659,29 @@ async def _resolver(
     # código o por el modelo), para que la confirmación del reclamo que sigue
     # empiece agradeciéndole por nombre.
 
+    # Lo que escribió el ciudadano, del mensaje actual al más viejo: contra esto
+    # se verifican los datos que propone el modelo.
+    dichos = [state["mensaje"]] + [
+        e.get("contenido") or ""
+        for e in reversed(state.get("historial") or [])
+        if e.get("actor") == ActorInteraccion.ciudadano.value
+    ]
+
     for _ in range(MAX_ITERACIONES):
         respuesta_llm: AIMessage = await modelo.ainvoke(mensajes)
+
+        if not respuesta_llm.tool_calls:
+            corregida = await _sin_confirmaciones_inventadas(
+                respuesta_llm, db, resultado_ejecucion, dichos
+            )
+            if isinstance(corregida, str):
+                return {
+                    "resultado_ejecucion": resultado_ejecucion or None,
+                    "caso_id": caso_id,
+                    "respuesta": corregida,
+                }
+            if corregida is not None:
+                respuesta_llm = corregida
 
         if not respuesta_llm.tool_calls:
             derivacion = resultado_ejecucion.get("derivar_a_operador")
@@ -569,6 +699,13 @@ async def _resolver(
             }
 
         mensajes.append(respuesta_llm)
+        # Lo que el modelo escribe junto con la llamada (un aviso de emergencia,
+        # por ejemplo, si una pauta del organismo lo pide) se conserva delante
+        # de la confirmación armada por código, salvo que afirme algo hecho o
+        # nombre un número de caso: eso lo dice solo la confirmación.
+        aviso_previo = _texto(respuesta_llm)
+        if _CONFIRMA_RESERVA.search(aviso_previo) or _CONFIRMA_RECLAMO.search(aviso_previo) or _REFERENCIA.search(aviso_previo):
+            aviso_previo = ""
         exitosas: list[tuple[dict, dict]] = []
         hubo_fallo = False
         # La identidad primero: si en el mismo mensaje dio sus datos y el
@@ -591,11 +728,6 @@ async def _resolver(
                     ),
                 }
             herramienta = tools_por_nombre.get(tool_call["name"])
-            dichos = [state["mensaje"]] + [
-                e.get("contenido") or ""
-                for e in state.get("historial") or []
-                if e.get("actor") == ActorInteraccion.ciudadano.value
-            ]
             if tool_call["name"] == "registrar_identidad" and not dni_dicho(
                 tool_call["args"].get("documento") or "", dichos
             ):
@@ -617,6 +749,29 @@ async def _resolver(
                 )
                 hubo_fallo = True
                 continue
+            if tool_call["name"] == "crear_reserva":
+                agendas = await listar_agendas(db)
+                nombrada = agenda_nombrada(agendas, dichos)
+                if nombrada is not None and nombrada.nombre != tool_call["args"].get("turno"):
+                    logger.warning(
+                        "ejecutor: el modelo pidió '%s' y el ciudadano nombró '%s'",
+                        tool_call["args"].get("turno"),
+                        nombrada.nombre,
+                    )
+                    tool_call["args"]["turno"] = nombrada.nombre
+                # El día y la hora que dijo el ciudadano mandan sobre los que
+                # propone el modelo, que a veces se equivoca de fecha.
+                pedida = ultima_fecha_hora_dicha(dichos)
+                if pedida is not None and pedida != tool_call["args"].get("fecha_hora"):
+                    tool_call["args"]["fecha_hora"] = pedida
+                if not dijo_un_dia(dichos):
+                    # Nunca dijo un día: la fecha la inventó el modelo. Se le
+                    # pregunta, con la grilla de la agenda a la vista.
+                    return {
+                        "resultado_ejecucion": resultado_ejecucion or None,
+                        "caso_id": caso_id,
+                        "respuesta": pedido_de_dia_y_hora(nombrada, Canal(state["canal"])),
+                    }
             if tool_call["name"] == "crear_reclamo":
                 inventados = datos_inventados(tool_call["args"].get("descripcion") or "", dichos)
                 if inventados:
@@ -650,6 +805,21 @@ async def _resolver(
                 if herramienta is None:
                     raise ValueError(f"herramienta no ofrecida: {tool_call['name']}")
                 salida = await herramienta.ainvoke(tool_call["args"])
+            except ReservaNoDisponible as error:
+                # No es una falla: el horario está ocupado, ya pasó o no existe
+                # en la agenda. Se le ofrecen los libres más cercanos con datos
+                # reales, sin pasar por el modelo, que podría inventar horarios.
+                return {
+                    "resultado_ejecucion": resultado_ejecucion or None,
+                    "caso_id": caso_id,
+                    "respuesta": horario_no_disponible(
+                        error.motivo,
+                        error.alternativas,
+                        error.vigente,
+                        Canal(state["canal"]),
+                        pedido=reservas.leer_fecha_hora(tool_call["args"].get("fecha_hora") or ""),
+                    ),
+                }
             except Exception:
                 logger.exception("ejecutor: fallo la tool %s", tool_call["name"])
                 hubo_fallo = True
@@ -705,7 +875,7 @@ async def _resolver(
             return {
                 "resultado_ejecucion": resultado_ejecucion,
                 "caso_id": caso_id,
-                "respuesta": cierre,
+                "respuesta": f"{aviso_previo}\n\n{cierre}" if aviso_previo else cierre,
             }
 
     return {

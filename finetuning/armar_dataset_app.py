@@ -28,6 +28,13 @@ Dos tipos de conversación:
 Las confirmaciones de reclamos y reservas no se entrenan: las arma el código
 (`app/agents/confirmacion.py`), así que la conversación termina en la llamada.
 
+La tercera versión agrega las pautas generales del organismo
+(`conocimiento/pautas_generales/`): aparecen en una parte de los prompts, igual
+que en producción, y hay conversaciones donde aplicarlas cambia la respuesta
+(una emergencia, un pedido de opinión política o de una clave). Las reservas
+traen la grilla de cada agenda en la información del organismo, como la arma
+hoy el agente de contexto.
+
 Uso, desde la raíz del repo con las dependencias de la app instaladas y después
 de `finetuning/armar_dataset.py`:
 
@@ -50,6 +57,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.agents.ejecutor import construir_tools, prompt_del_sistema
+from scripts.seed_conocimiento import CARPETA_CONOCIMIENTO, leer_carpeta
 from app.agents.intake import SYSTEM_INTAKE, _formatear_historial
 from app.agents.llm import a_formato_qwen
 from app.db.models import Canal
@@ -66,6 +74,25 @@ PROPORCION_VALIDACION = 0.1
 HOY_DEL_DATASET = datetime(2026, 10, 19)
 
 random.seed(SEMILLA)
+
+# Las pautas tal como las arma `listar_pautas_generales` para el prompt.
+PAUTAS = [
+    f"{titulo}: {contenido}"
+    for titulo, contenido, _ in leer_carpeta(CARPETA_CONOCIMIENTO / "pautas_generales")
+]
+# En producción un organismo puede no tener pautas cargadas: el modelo tiene que
+# andar igual con el bloque y sin él.
+PROPORCION_CON_PAUTAS = 0.4
+_AL_AZAR = object()
+
+# La información de turnos que suma el agente de contexto cuando la intención
+# es una reserva (ver `buscar_conocimiento`).
+CONOCIMIENTO_TURNOS = [
+    "Turnos disponibles para reservar: CeSAC; DNI; licencia de conducir",
+    "Horarios de atención: CeSAC, de lunes a viernes de 9:00 a 15:00, cada 30 minutos; "
+    "DNI, de lunes a viernes de 8:00 a 13:00, cada 20 minutos; licencia de conducir, de "
+    "lunes a viernes de 8:00 a 14:00, cada 30 minutos",
+]
 
 
 # --- Render ------------------------------------------------------------------
@@ -112,11 +139,15 @@ def conversacion_ejecutor(
     conocimiento: list[str] | None = None,
     origen_menu: str | None = None,
     hoy: datetime = HOY_DEL_DATASET,
+    pautas=_AL_AZAR,
 ) -> dict:
     canal = canal or _canal_ejecutor()
+    if pautas is _AL_AZAR:
+        pautas = PAUTAS if random.random() < PROPORCION_CON_PAUTAS else None
     sistema = prompt_del_sistema(
         canal,
         conocimiento=conocimiento,
+        pautas=pautas,
         origen_menu=origen_menu,
         identificado=identificado,
         hoy=hoy,
@@ -355,7 +386,9 @@ def reservas(n_completas: int, n_dos_turnos: int) -> list[dict]:
             HumanMessage(content=pedido),
             AIMessage(content="", tool_calls=[_llamada("crear_reserva", {"turno": turno, "fecha_hora": iso})]),
         ]
-        salida.append(conversacion_ejecutor(turnos, intencion="reserva", hoy=hoy))
+        salida.append(
+            conversacion_ejecutor(turnos, intencion="reserva", hoy=hoy, conocimiento=CONOCIMIENTO_TURNOS)
+        )
     for _ in range(n_dos_turnos):
         hoy = _hoy_al_azar()
         turno = random.choice(TURNOS)
@@ -368,7 +401,9 @@ def reservas(n_completas: int, n_dos_turnos: int) -> list[dict]:
             HumanMessage(content=random.choice(["{f}", "Puede ser {f}", "Me queda bien {f}"]).format(f=dicha)),
             AIMessage(content="", tool_calls=[_llamada("crear_reserva", {"turno": turno, "fecha_hora": iso})]),
         ]
-        salida.append(conversacion_ejecutor(turnos, intencion="reserva", hoy=hoy))
+        salida.append(
+            conversacion_ejecutor(turnos, intencion="reserva", hoy=hoy, conocimiento=CONOCIMIENTO_TURNOS)
+        )
     return salida
 
 
@@ -523,6 +558,99 @@ def intake_nuevos() -> list[dict]:
     return salida
 
 
+# --- Pautas generales (v3) ----------------------------------------------------
+
+# (lo que cuenta el vecino, el reclamo formal, la categoría, el aviso que pide la
+# pauta de emergencias). El aviso va primero, antes de pedir cualquier dato.
+EMERGENCIAS = [
+    ("hay un cable de luz caído en la vereda y saltan chispas", "Cable de luz caído con chispas en la vereda",
+     "infraestructura", "Por favor, que nadie se acerque al cable. Si hay riesgo inmediato, llame al 911."),
+    ("se está prendiendo fuego un contenedor de basura", "Contenedor de basura incendiándose",
+     "servicio", "Si el fuego crece o hay personas cerca, llame ya a los bomberos al 100 y aléjese del contenedor."),
+    ("hay olor a gas fuerte en la calle", "Olor a gas en la vía pública",
+     "infraestructura", "No encienda nada ni se acerque. Si el olor es fuerte, llame al 911 desde un lugar seguro."),
+    ("un árbol está por caerse sobre los autos", "Árbol con riesgo de caída sobre la calzada",
+     "infraestructura", "Pida que nadie se quede debajo del árbol. Si hay riesgo inmediato, llame al 911."),
+    ("se cayó una persona en un pozo de la vereda y está lastimada", "Pozo en la vereda donde se lastimó una persona",
+     "infraestructura", "Si la persona está lastimada, llame primero a emergencias médicas al 107."),
+    ("se inundó la esquina y hay un auto con gente adentro", "Esquina inundada con un auto atrapado",
+     "infraestructura", "Si hay personas en peligro, llame ya al 911 o a los bomberos al 100."),
+]
+VIOLENCIA = [
+    "Mi pareja me está amenazando y tengo miedo",
+    "Mi vecina está sufriendo violencia de su marido, ¿qué hago?",
+    "Me pegaron en mi casa y no sé a quién llamar",
+]
+TRATO = [
+    ("¿Qué opinás del intendente?", "No puedo opinar sobre política ni sobre funcionarios. Sí lo puedo ayudar con un reclamo, un turno o una consulta sobre trámites: ¿qué necesita?"),
+    ("¿A quién tengo que votar?", "No puedo opinar sobre política ni sobre elecciones. ¿Lo ayudo con algún trámite, reclamo o turno?"),
+    ("Este gobierno es un desastre, ¿no te parece?", "Entiendo su malestar, pero no puedo opinar sobre política ni sobre la gestión. Si tiene un problema puntual, lo registro como reclamo: ¿qué pasó?"),
+    ("¿Necesitás mi clave de Mi Argentina para el turno?", "No, nunca le voy a pedir contraseñas ni claves. Para el turno solo necesito el trámite, el día y la hora."),
+    ("Te paso el número de mi tarjeta para pagar la multa", "Por favor, no me pase datos de su tarjeta: nunca se los voy a pedir por este medio. El pago de la multa se hace en los canales oficiales del organismo."),
+    ("¿Me das la clave del wifi de la sede?", "No tengo esa información. Lo puedo ayudar con reclamos, turnos y consultas sobre trámites: ¿qué necesita?"),
+]
+
+
+def _con_direccion(frase: str) -> tuple[str, str]:
+    direccion = f"{random.choice(CALLES)} {random.randint(100, 5000)}"
+    return f"{frase.capitalize()} en {direccion}", direccion
+
+
+def emergencias(n: int) -> list[dict]:
+    """Con la pauta presente: primero el aviso de seguridad; después, si no está
+    identificado, los datos; si lo está, el reclamo con el aviso adelante."""
+    salida = []
+    for _ in range(n):
+        frase, formal, categoria, aviso = random.choice(EMERGENCIAS)
+        mensaje, direccion = _con_direccion(frase)
+        if random.random() < 0.5:
+            turnos = [
+                HumanMessage(content=mensaje),
+                AIMessage(content=(
+                    f"{aviso} Tomé nota de lo que pasa en {direccion}. Para registrar el reclamo a su "
+                    "nombre necesito su nombre completo y su DNI."
+                )),
+            ]
+            salida.append(conversacion_ejecutor(
+                turnos, intencion="reclamo", identificado=False, canal=Canal.whatsapp, pautas=PAUTAS,
+            ))
+        else:
+            reclamo = _llamada("crear_reclamo", {"descripcion": f"{formal} en {direccion}", "categoria": categoria})
+            turnos = [HumanMessage(content=mensaje), AIMessage(content=aviso, tool_calls=[reclamo])]
+            salida.append(conversacion_ejecutor(turnos, intencion="reclamo", pautas=PAUTAS))
+    for mensaje in VIOLENCIA:
+        turnos = [
+            HumanMessage(content=mensaje),
+            AIMessage(content=(
+                "Si está en peligro ahora, llame al 911. Para orientación y ayuda en situaciones de "
+                "violencia de género puede llamar al 144, las 24 horas y en forma gratuita. "
+                "¿Quiere que lo atienda una persona del equipo?"
+            )),
+        ]
+        salida.append(conversacion_ejecutor(turnos, intencion="consulta", canal=Canal.whatsapp, pautas=PAUTAS))
+    return salida
+
+
+def trato() -> list[dict]:
+    salida = []
+    for _ in range(3):
+        for pregunta, respuesta in TRATO:
+            turnos = [HumanMessage(content=pregunta), AIMessage(content=respuesta)]
+            salida.append(conversacion_ejecutor(turnos, intencion="consulta", pautas=PAUTAS))
+    return salida
+
+
+def intake_emergencias() -> list[dict]:
+    salida = []
+    for frase, _, categoria, _ in EMERGENCIAS:
+        mensaje, direccion = _con_direccion(frase)
+        salida.append(conversacion_intake(
+            mensaje, intencion="reclamo", confianza=0.9,
+            entidades={"categoria": categoria, "direccion": direccion},
+        ))
+    return salida
+
+
 # --- Armado ------------------------------------------------------------------
 
 
@@ -561,6 +689,9 @@ def _nuevos() -> list[dict]:
         + pedidos_de_humano()
         + elecciones_de_menu()
         + intake_nuevos()
+        + emergencias(60)
+        + trato()
+        + intake_emergencias()
     )
 
 
@@ -571,7 +702,7 @@ def _prueba() -> list[dict]:
     salida = []
     for e in _leer("prueba_tool_calling.jsonl"):
         conversacion = conversacion_ejecutor(
-            [HumanMessage(content=e["instruccion"])], intencion=e["intencion"], canal=Canal.whatsapp
+            [HumanMessage(content=e["instruccion"])], intencion=e["intencion"], canal=Canal.whatsapp, pautas=None
         )
         conversacion["esperado"] = e["llamada_herramienta"]
         conversacion["instruccion"] = e["instruccion"]

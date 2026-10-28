@@ -7,7 +7,7 @@ Uso:  python -m scripts.seed_demo
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -20,6 +20,7 @@ from app.db.models import (
     Ciudadano,
     DocumentoConocimiento,
     EstadoCaso,
+    EstadoReserva,
     GrupoReclamo,
     Interaccion,
     Reserva,
@@ -28,6 +29,7 @@ from app.db.models import (
     Turno,
     Usuario,
 )
+from app.db.crud.turnos import ZONA_HORARIA, horarios_del_dia
 from app.db.session import async_session_factory
 
 SUPERVISOR_DEMO = "supervisor@omnicivitas.test"
@@ -326,37 +328,149 @@ async def _caso_reserva_abierta(db) -> None:
     )
 
 
+# (nombre, descripción, sede, apertura, cierre, minutos por turno, cupos por horario)
 TURNOS_DEMO = [
     (
         "Renovación de licencia de conducir",
         "Turnos para renovar la licencia de conducir en la sede comunal. "
         "Requiere licencia anterior, DNI y el pago de la boleta previa.",
+        "Sede comunal, mesa de licencias",
+        time(8, 0), time(14, 0), 30, 1,
     ),
     (
         "Renovación de DNI",
         "Turnos para tramitar la renovación del DNI en el centro de documentación "
         "más cercano al domicilio.",
+        "Centro de documentación de la sede comunal",
+        time(8, 0), time(13, 0), 20, 2,
     ),
     (
         "Atención en centro de salud (CeSAC)",
         "Turnos de atención primaria en los centros de salud y acción comunitaria.",
+        "Centro de salud del barrio",
+        time(9, 0), time(15, 0), 30, 2,
     ),
 ]
+
+# Vecinos con turno en la semana, para que la grilla del panel se vea como la
+# de un organismo en funcionamiento y no vacía. Los nombres se combinan.
+NOMBRES = ["Lucía", "Martín", "Sofía", "Diego", "Valentina", "Tomás", "Camila", "Nicolás",
+           "Julieta", "Federico", "Agustina", "Pablo", "Florencia", "Gonzalo", "Micaela"]
+APELLIDOS = ["Fernández", "Acosta", "Benítez", "Ramírez", "Sosa", "Herrera", "Torres", "Romero",
+             "Molina", "Ruiz", "Díaz", "Medina", "Castro", "Suárez", "Giménez"]
+PRIMER_DOCUMENTO_DE_LA_AGENDA = 30_555_100
 
 
 async def _turnos_demo(db) -> dict[str, Turno]:
     """Las tres agendas de turnos comunes sobre las que reserva el agente."""
     turnos: dict[str, Turno] = {}
-    for nombre, descripcion in TURNOS_DEMO:
+    for nombre, descripcion, sede, apertura, cierre, minutos, cupos in TURNOS_DEMO:
         turno = (
             await db.execute(select(Turno).where(Turno.nombre == nombre))
         ).scalars().first()
         if turno is None:
             turno = Turno(nombre=nombre, descripcion=descripcion)
             db.add(turno)
-            await db.flush()
+        # La grilla se actualiza también en una base ya sembrada.
+        turno.sede = sede
+        turno.dias_atencion = "0,1,2,3,4"
+        turno.hora_apertura, turno.hora_cierre = apertura, cierre
+        turno.duracion_minutos, turno.cupos_por_horario = minutos, cupos
+        await db.flush()
         turnos[nombre] = turno
     return turnos
+
+
+def _dias_habiles_desde(dia, cantidad: int) -> list:
+    dias = []
+    while len(dias) < cantidad:
+        if dia.weekday() < 5:
+            dias.append(dia)
+        dia += timedelta(days=1)
+    return dias
+
+
+def _dias_habiles(cantidad: int) -> list:
+    return _dias_habiles_desde(datetime.now(ZONA_HORARIA).date(), cantidad)
+
+
+async def _agenda_de_la_semana(db, turnos: dict[str, Turno]) -> None:
+    """Turnos repartidos en la semana en curso (completa) y en la siguiente
+    (más liviana): lo que ya pasó queda atendido o ausente, y algunos
+    cancelados. El reparto es fijo para que la demo sea reproducible."""
+    if await _ciudadano_por_documento(db, str(PRIMER_DOCUMENTO_DE_LA_AGENDA)) is not None:
+        return
+    ahora = datetime.now(ZONA_HORARIA)
+    lunes = ahora.date() - timedelta(days=ahora.weekday())
+    dias = _dias_habiles_desde(lunes, 10)
+    numero = 0
+    for indice_agenda, agenda in enumerate(turnos.values()):
+        for indice_dia, dia in enumerate(dias):
+            grilla = horarios_del_dia(agenda, dia)
+            por_dia = 4 if indice_dia < 5 else 2
+            # Posiciones distintas: dos turnos en el mismo horario de una agenda
+            # de un solo puesto la dejarían por encima de su cupo.
+            posiciones = sorted({(k * 5 + indice_dia * 3 + indice_agenda * 2) % len(grilla) for k in range(por_dia)})
+            for k, posicion in enumerate(posiciones):
+                momento = grilla[posicion]
+                # En las agendas con dos puestos, algunos horarios se llenan.
+                veces = 2 if agenda.cupos_por_horario > 1 and k == 0 and indice_dia % 2 == 0 else 1
+                for _ in range(veces):
+                    numero += 1
+                    await _turno_de_vecino(db, agenda, momento, numero, ahora)
+
+
+async def _turno_de_vecino(db, agenda: Turno, momento: datetime, numero: int, ahora: datetime) -> None:
+    nombre = f"{NOMBRES[numero % len(NOMBRES)]} {APELLIDOS[(numero * 7) % len(APELLIDOS)]}"
+    vecino = Ciudadano(documento=str(PRIMER_DOCUMENTO_DE_LA_AGENDA + numero - 1), nombre=nombre)
+    db.add(vecino)
+    await db.flush()
+    caso = Caso(
+        ciudadano_id=vecino.id,
+        tipo=TipoCaso.reserva,
+        estado=EstadoCaso.cerrado,
+        motivo_cierre="resuelto",
+        canal_origen=Canal.whatsapp if numero % 3 else Canal.voz,
+        canal_actual=Canal.whatsapp,
+    )
+    db.add(caso)
+    await db.flush()
+    hora = f"{momento.hour}:{momento.minute:02d}"
+    db.add_all(
+        [
+            Interaccion(caso_id=caso.id, contenido=f"Quiero un turno de {agenda.nombre.lower()}",
+                        canal=Canal.whatsapp, actor=ActorInteraccion.ciudadano),
+            Interaccion(caso_id=caso.id,
+                        contenido=f"Le reservé el turno de {agenda.nombre} a las {hora}.",
+                        canal=Canal.whatsapp, actor=ActorInteraccion.agente_ia),
+        ]
+    )
+    if momento < ahora:
+        estado = EstadoReserva.ausente if numero % 6 == 0 else EstadoReserva.atendida
+    elif numero % 9 == 0:
+        estado = EstadoReserva.cancelada
+    else:
+        estado = EstadoReserva.confirmada
+    db.add(
+        Reserva(
+            turno_id=agenda.id,
+            caso_id=caso.id,
+            ciudadano_id=vecino.id,
+            fecha_hora=momento,
+            estado=estado,
+            motivo_cancelacion="Pedido del ciudadano" if estado == EstadoReserva.cancelada else None,
+            cancelada_en=ahora if estado == EstadoReserva.cancelada else None,
+        )
+    )
+    db.add(
+        Auditoria(
+            caso_id=caso.id,
+            accion="creacion_reserva",
+            actor=ACTOR_AGENTE,
+            actor_tipo=ActorInteraccion.agente_ia,
+            metadata_={"turno": agenda.nombre, "fecha_hora": momento.strftime("%Y-%m-%d %H:%M")},
+        )
+    )
 
 
 async def _ciudadano_por_documento(db, documento: str) -> Ciudadano | None:
@@ -373,11 +487,13 @@ async def _reservas_demo(db, turnos: dict[str, Turno]) -> None:
         return
 
     ejemplos = [
-        ("33987654", "Renovación de licencia de conducir", AHORA + timedelta(days=3, hours=10),
+        ("33987654", "Renovación de licencia de conducir",
+         datetime.combine(_dias_habiles(3)[-1], time(10, 0), tzinfo=ZONA_HORARIA),
          "Necesito un turno para renovar la licencia de conducir, ¿puede ser el viernes a la mañana?",
          "Listo. Le reservé el turno de renovación de licencia de conducir para el "
          "viernes a las 10:00 en su sede comunal. Lleve la licencia anterior y el DNI."),
-        ("28456789", "Renovación de DNI", AHORA + timedelta(days=5, hours=9.5),
+        ("28456789", "Renovación de DNI",
+         datetime.combine(_dias_habiles(5)[-1], time(9, 40), tzinfo=ZONA_HORARIA),
          "Hola, quiero un turno para renovar mi DNI la semana que viene.",
          "Le reservé el turno de renovación de DNI para la semana próxima a las 09:30 "
          "en el centro de documentación de su comuna. Lleve el DNI anterior."),
@@ -552,6 +668,7 @@ async def main() -> None:
         # igual los turnos, las reservas, el grupo de reclamos y el conocimiento.
         turnos = await _turnos_demo(db)
         await _reservas_demo(db, turnos)
+        await _agenda_de_la_semana(db, turnos)
         await _reclamo_comun_y_grupo(db)
         await _conocimiento_demo(db)
         await db.commit()

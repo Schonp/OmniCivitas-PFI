@@ -9,9 +9,10 @@ comprobante"). Una confirmación con datos reales no puede inventar nada, y en
 una llamada ahorra una inferencia entera antes de que el ciudadano escuche algo.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from app.db.models import Canal
+from app.db.crud.turnos import ZONA_HORARIA, ahora_local, horario_de_atencion, momento_en_palabras
+from app.db.models import Canal, Reserva, Turno
 from app.tools.reservas import FORMATO_FECHA_HORA
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
@@ -66,13 +67,18 @@ def _reserva(salida: dict, voz: bool) -> str:
     turno = salida.get("turno", "")
     referencia = salida.get("referencia", "")
     fecha = _fecha_legible(salida.get("fecha_hora", ""))
+    sede = salida.get("sede")
     if voz:
         cuando = f" para el {fecha[0]} a {_hora_hablada(fecha[1])}" if fecha else ""
-        return f"Listo, le reservé el turno de {turno}{cuando}. El número de caso es {referencia}."
+        donde = f", en {sede}" if sede else ""
+        return f"Listo, le reservé el turno de {turno}{cuando}{donde}. El número de caso es {referencia}."
     lineas = [f"Le reservé el turno de {turno}.", "", f"Turno: {turno}"]
     if fecha:
         lineas.append(f"Día y hora: {fecha[0]}, {fecha[1]} h")
+    if sede:
+        lineas.append(f"Lugar: {sede}")
     lineas.append(f"Número de caso: {referencia}")
+    lineas += ["", "Si no puede ir, escríbame \"cancelar mi turno\" y el horario queda libre para otra persona."]
     return "\n".join(lineas)
 
 
@@ -149,3 +155,139 @@ def estado_de_casos(salida: dict, canal: Canal) -> str:
     if voz:
         return f"{tipo}{sobre} {estado}. El número de caso es {referencia}."
     return f"{tipo}{sobre} {estado}.\n\nNúmero de caso: {referencia}"
+
+
+def horario_no_disponible(
+    motivo: str,
+    alternativas: list,
+    vigente: Reserva | None,
+    canal: Canal,
+    pedido: datetime | None = None,
+) -> str:
+    """Cuando el horario pedido no se puede reservar: por qué y qué hay libre."""
+    voz = canal == Canal.voz
+    if vigente is not None:
+        # Ya tiene uno de ese trámite: se le dice cómo moverlo al que pidió.
+        cuando = momento_en_palabras(pedido) if pedido else "otro día"
+        return f"{motivo} Si quiere pasarlo al {cuando}, dígame \"cambiar mi turno al {cuando}\"."
+    if not alternativas:
+        return f"{motivo} No encontré horarios libres en los próximos días. ¿Quiere probar con otra fecha?"
+    opciones = [momento_en_palabras(momento) for momento in alternativas]
+    if voz:
+        lista = ", ".join(opciones[:-1]) + (" o " if len(opciones) > 1 else "") + opciones[-1]
+        return f"{motivo} Tengo libre el {lista}. ¿Cuál le queda mejor?"
+    return (
+        f"{motivo} Los horarios libres más cercanos son:\n"
+        + "\n".join(f"- {opcion}" for opcion in opciones)
+        + "\n\n¿Cuál le queda mejor?"
+    )
+
+
+def turno_cancelado(reserva: Reserva, canal: Canal) -> str:
+    cuando = momento_en_palabras(reserva.fecha_hora)
+    if canal == Canal.voz:
+        return (
+            f"Listo, cancelé su turno de {reserva.turno.nombre} del {cuando}. "
+            "Si necesita otro, dígame qué día le queda bien."
+        )
+    return (
+        f"Listo, cancelé su turno de {reserva.turno.nombre} del {cuando} "
+        f"({reserva.caso.referencia}). El horario quedó libre.\n\n"
+        "Si necesita otro turno, dígame qué día le queda bien."
+    )
+
+
+def turnos_para_elegir(reservas: list[Reserva], canal: Canal, cambiar: bool = False) -> str:
+    accion = "cambiar" if cambiar else "cancelar"
+    if canal == Canal.voz:
+        lista = "; ".join(
+            f"{r.turno.nombre} el {momento_en_palabras(r.fecha_hora)}" for r in reservas
+        )
+        return f"Tiene estos turnos pendientes: {lista}. ¿Cuál quiere {accion}?"
+    lineas = [
+        f"- {r.caso.referencia}: {r.turno.nombre}, {momento_en_palabras(r.fecha_hora)}"
+        for r in reservas
+    ]
+    return (
+        "Tiene estos turnos pendientes:\n" + "\n".join(lineas)
+        + f"\n\n¿Cuál quiere {accion}? Puede indicarme el número o el trámite."
+    )
+
+
+def sin_turnos_pendientes(canal: Canal, cambiar: bool = False) -> str:
+    if cambiar:
+        return "No tiene turnos pendientes para cambiar. Si quiere, le reservo uno: ¿para qué trámite?"
+    return "No tiene turnos pendientes para cancelar. ¿Lo ayudo con otra cosa?"
+
+
+# Encabeza el ofrecimiento de horarios cuando el cambio no se pudo hacer: el
+# código lo reconoce en el historial para entender una respuesta corta como
+# "el de las 10:30".
+MARCA_CAMBIO_NO_DISPONIBLE = "No pude cambiar su turno"
+
+
+def cambio_no_disponible(reserva: Reserva, motivo: str, alternativas: list, canal: Canal) -> str:
+    encabezado = f"{MARCA_CAMBIO_NO_DISPONIBLE} {reserva.caso.referencia}: {motivo}"
+    if not alternativas:
+        return f"{encabezado} No encontré horarios libres en esos días. ¿Quiere probar con otra fecha?"
+    opciones = [momento_en_palabras(momento) for momento in alternativas]
+    if canal == Canal.voz:
+        lista = ", ".join(opciones[:-1]) + (" o " if len(opciones) > 1 else "") + opciones[-1]
+        return f"{encabezado} Tengo libre el {lista}. ¿Cuál le queda mejor?"
+    return (
+        f"{encabezado} Los horarios libres más cercanos son:\n"
+        + "\n".join(f"- {opcion}" for opcion in opciones)
+        + "\n\n¿Cuál le queda mejor?"
+    )
+
+
+def pedido_de_nuevo_horario(reserva: Reserva, canal: Canal) -> str:
+    return (
+        f"¿Para qué día y a qué hora quiere cambiar su turno de {reserva.turno.nombre} "
+        f"del {momento_en_palabras(reserva.fecha_hora)}? Los turnos son "
+        f"{horario_de_atencion(reserva.turno)}."
+    )
+
+
+def turno_reprogramado(reserva: Reserva, anterior: datetime, canal: Canal) -> str:
+    nuevo = momento_en_palabras(reserva.fecha_hora)
+    if canal == Canal.voz:
+        return (
+            f"Listo, pasé su turno de {reserva.turno.nombre} al {nuevo}. "
+            "El horario anterior quedó libre."
+        )
+    lineas = [
+        f"Listo, cambié su turno de {reserva.turno.nombre}.",
+        "",
+        f"Antes: {momento_en_palabras(anterior)}",
+        f"Ahora: {nuevo}",
+    ]
+    if reserva.turno.sede:
+        lineas.append(f"Lugar: {reserva.turno.sede}")
+    lineas += [f"Número de caso: {reserva.caso.referencia}", "", "El horario anterior quedó libre."]
+    return "\n".join(lineas)
+
+
+def recordatorio_de_turno(reserva: Reserva) -> str:
+    """El recordatorio del día anterior. En una sola línea: si la ventana de 24 h
+    de WhatsApp está cerrada, sale dentro de la plantilla de seguimiento, que no
+    admite saltos de línea."""
+    donde = f", en {reserva.turno.sede}" if reserva.turno.sede else ""
+    dia = reserva.fecha_hora.astimezone(ZONA_HORARIA).date()
+    cuando = "para mañana, " if dia == ahora_local().date() + timedelta(days=1) else "para el "
+    return (
+        f"Le recordamos su turno de {reserva.turno.nombre} {cuando}"
+        f"{momento_en_palabras(reserva.fecha_hora)}{donde} (número de caso "
+        f"{reserva.caso.referencia}). Si no puede ir, responda \"cancelar mi turno\" y el "
+        "horario queda libre para otra persona."
+    )
+
+
+def pedido_de_dia_y_hora(agenda: Turno | None, canal: Canal) -> str:
+    """Cuando quiere un turno pero todavía no dijo para qué día."""
+    if agenda is None:
+        return "¿Para qué trámite es el turno, y qué día y a qué hora le queda bien?"
+    return (
+        f"¿Qué día y a qué hora le queda bien? Los turnos de {agenda.nombre} son "
+        f"{horario_de_atencion(agenda)}."
+    )

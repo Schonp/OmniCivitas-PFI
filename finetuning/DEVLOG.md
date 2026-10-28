@@ -828,10 +828,48 @@ En la misma corrida el modelo escribió "Número de caso: REC-20194FB3" con el
 caso real REC-20194FB2. Se quitan de la respuesta las líneas con un número de
 caso que no es del ciudadano (`sin_referencias_ajenas`).
 
+### Agenda de turnos: las reglas en el código
+
+La reserva aceptaba cualquier fecha: dos veces el mismo horario, un domingo, el
+pasado. Y se guardaba como UTC, así que el turno de las 10 aparecía a las 7. La
+agenda pasó a tener grilla (días, horario, minutos por turno, cupos,
+anticipación, sede), días bloqueados y estados de reserva; las reglas viven en
+`app/db/crud/turnos.py`, con la agenda bloqueada (`FOR UPDATE`) mientras se
+reserva y un índice único por ciudadano y horario.
+
+Con el modelo real aparecieron tres fallas, las tres resueltas en el código:
+
+- Inventaba la fecha cuando el ciudadano todavía no la había dicho: sin un día
+  nombrado (`dijo_un_dia`) no se reserva y se pregunta.
+- Se equivocaba de agenda (pedían licencia y reservaba en el CeSAC): manda la
+  agenda que nombró el ciudadano (`agenda_nombrada`), y el día y la hora se leen
+  de su mensaje (`app/agents/fechas.py`).
+- Confirmaba en el texto reservas que no hizo, con una agenda que no existe:
+  si lo que dijo el ciudadano alcanza, se reserva de verdad; si no, se le dice
+  que todavía no quedó hecho (`_sin_confirmaciones_inventadas`).
+
+Cancelar y cambiar de horario por chat también se resuelve en el código
+(`app/agents/cancelacion.py`): el modelo no tiene esas herramientas y mover el
+turno equivocado es peor que no moverlo.
+
+### Tercera versión del dataset
+
+Suma las pautas generales al 40 % de los prompts del ejecutor (en producción un
+organismo puede no tenerlas), 60 conversaciones de emergencias (primero el
+número de emergencias; después los datos o el reclamo), consultas de violencia
+de género (911 y 144), pedidos de opinión política o de claves, y la grilla de
+cada agenda en la información de las reservas. El texto que el modelo escribe
+junto con una llamada (el aviso de emergencia) ahora se conserva delante de la
+confirmación armada por código.
+
+Las conversaciones más largas llegan a unos 2450 tokens (medido con Ollama),
+dentro de los 2560 del entrenamiento. El conjunto de prueba se mide sin pautas,
+para comparar con la v2.
+
 ### Qué queda
 
 - [ ] Si se vuelve a entrenar: más conversaciones de identificación que pidan
       los datos primero, para que el modelo lo haga solo y la regla del código
       quede como red de seguridad.
-- [ ] Sumar conversaciones con pautas generales al dataset, para que el modelo
-      las aplique (hoy antepone el pedido de identificación).
+- [ ] Entrenar la v3 en Colab (el dataset ya trae las pautas), servirla y
+      medirla con `scripts/evaluar_modelo_local.py` contra la v2.

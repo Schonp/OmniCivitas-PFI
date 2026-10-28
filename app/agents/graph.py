@@ -10,6 +10,7 @@ from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.aviso_ia import anteponer_aviso
+from app.agents.cancelacion import es_gestion_de_turno
 from app.agents.contexto import nodo_contexto, obtener_ciudadano_por_canal
 from app.agents.ejecutor import nodo_ejecutor
 from app.agents.identidad import responde_con_su_identidad
@@ -94,6 +95,12 @@ def _sin_definir(state: AgentState) -> bool:
 
 
 def decidir_ruta(state: AgentState) -> str:
+    # Cancelar o cambiar un turno no depende de cómo lo clasifique el intake ni
+    # de que el caso abierto esté con una persona: lo resuelve el ejecutor por
+    # código y actúa sobre la reserva, no sobre el caso de la conversación.
+    if state.get("ciudadano_id") is not None and es_gestion_de_turno(state):
+        return "ejecutor"
+
     # El caso ya lo tiene una persona: el agente acusa recibo y se corre. Va
     # primero que todo, incluido un pedido de humano —volver a pasar por
     # `escalado` regeneraría el `resumen_ia` con el que el operador está

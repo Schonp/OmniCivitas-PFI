@@ -1,8 +1,23 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, ForeignKey, JSON, String, Text, false, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Enum as SAEnum,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Text,
+    Time,
+    false,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 from sqlalchemy.types import TypeDecorator
@@ -39,6 +54,15 @@ class EstadoCaso(str, enum.Enum):
     en_progreso = "en_progreso"
     escalado = "escalado"
     cerrado = "cerrado"
+
+
+class EstadoReserva(str, enum.Enum):
+    """Solo una reserva `confirmada` ocupa cupo: cancelarla lo libera."""
+
+    confirmada = "confirmada"
+    cancelada = "cancelada"
+    atendida = "atendida"
+    ausente = "ausente"
 
 
 class Canal(str, enum.Enum):
@@ -222,24 +246,78 @@ class Turno(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     nombre: Mapped[str] = mapped_column(String(200), unique=True)
     descripcion: Mapped[str] = mapped_column(Text)
+    sede: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # La grilla de la agenda, como en cualquier turnero: qué días atiende, de
+    # qué hora a qué hora, cada cuánto empieza un turno y cuántas personas se
+    # atienden en el mismo horario (puestos o ventanillas en paralelo).
+    # Días con la numeración de Python: 0 es lunes, 6 es domingo.
+    dias_atencion: Mapped[str] = mapped_column(String(20), default="0,1,2,3,4", server_default="0,1,2,3,4")
+    hora_apertura: Mapped[time] = mapped_column(Time, default=time(8, 0), server_default="08:00")
+    hora_cierre: Mapped[time] = mapped_column(Time, default=time(14, 0), server_default="14:00")
+    duracion_minutos: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
+    cupos_por_horario: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    anticipacion_maxima_dias: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     reservas: Mapped[list["Reserva"]] = relationship(back_populates="turno")
 
+    @property
+    def dias(self) -> list[int]:
+        return [int(dia) for dia in self.dias_atencion.split(",") if dia.strip()]
+
 
 class Reserva(Base):
     __tablename__ = "reservas"
+    __table_args__ = (
+        # Un ciudadano no puede tener dos turnos vigentes en el mismo momento,
+        # aunque sean de agendas distintas. Lo garantiza la base y no solo el
+        # código: dos pedidos simultáneos no pueden colarse los dos.
+        Index(
+            "ux_reserva_ciudadano_horario",
+            "ciudadano_id",
+            "fecha_hora",
+            unique=True,
+            postgresql_where=text("estado = 'confirmada'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     turno_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("turnos.id"), index=True)
     caso_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("casos.id"), index=True)
     ciudadano_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ciudadanos.id"), index=True)
     fecha_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    estado: Mapped[EstadoReserva] = mapped_column(
+        SAEnum(EstadoReserva, name="estado_reserva"),
+        default=EstadoReserva.confirmada,
+        server_default=EstadoReserva.confirmada.value,
+    )
+    motivo_cancelacion: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    cancelada_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Se marca solo si el recordatorio salió de verdad: si el envío falla, el
+    # próximo envío de recordatorios lo vuelve a intentar.
+    recordatorio_enviado_en: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     turno: Mapped["Turno"] = relationship(back_populates="reservas")
     ciudadano: Mapped["Ciudadano"] = relationship()
     caso: Mapped["Caso"] = relationship()
+
+
+class DiaBloqueado(Base):
+    """Un día sin atención: un feriado, o una jornada en que una agenda no
+    atiende (capacitación, mudanza de la sede). Sin agenda, vale para todas."""
+
+    __tablename__ = "dias_bloqueados"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    turno_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("turnos.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    fecha: Mapped[date] = mapped_column(Date, index=True)
+    motivo: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class DocumentoConocimiento(Base):

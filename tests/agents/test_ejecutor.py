@@ -572,3 +572,32 @@ async def test_el_ejecutor_no_deja_pasar_un_numero_de_caso_inventado(db_session,
     resultado = await mod.nodo_ejecutor(estado, db_session)
 
     assert resultado["respuesta"] == "Lave la herida con agua y jabón."
+
+
+async def test_el_aviso_que_acompana_la_llamada_queda_antes_de_la_confirmacion(db_session, ciudadano, mocker):
+    """Una pauta de emergencias: el número va antes de la confirmación del reclamo."""
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        return_value=_AI(
+            content="Por favor, que nadie se acerque al cable. Si hay riesgo inmediato, llame al 911.",
+            tool_calls=[{"name": "crear_reclamo", "args": {
+                "descripcion": "Cable caído en Av. Corrientes 1500", "categoria": "infraestructura"}, "id": "t1"}],
+        )
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+    estado = {
+        "mensaje": "Hay un cable caído en Av. Corrientes 1500 y saltan chispas", "canal": "whatsapp",
+        "identificador": ciudadano.telefono, "ciudadano_id": str(ciudadano.id), "identificado": True,
+        "caso_id": None, "historial": [], "conocimiento": [], "intencion": "reclamo", "entidades": {},
+        "confianza": 0.9, "resultado_ejecucion": None, "requiere_escalado": False,
+        "motivo_escalado": None, "respuesta": None,
+    }
+
+    resultado = await mod.nodo_ejecutor(estado, db_session)
+
+    assert resultado["respuesta"].startswith("Por favor, que nadie se acerque al cable.")
+    assert "Registré su reclamo" in resultado["respuesta"]

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from app.agents.graph import procesar_mensaje
 from app.db.models import Canal, Caso, Interaccion, TipoCaso, Turno
 from app.schemas.agente import ClasificacionIntent
+from tests.horarios import horario
 
 
 async def test_el_reclamo_que_arranca_sin_direccion_no_se_parte_en_dos_casos(
@@ -98,7 +99,7 @@ async def test_la_reserva_que_arranca_sin_horario_no_se_parte_en_dos_casos(
                         "name": "crear_reserva",
                         "args": {
                             "turno": "Renovación de DNI",
-                            "fecha_hora": "2026-09-17 13:00",
+                            "fecha_hora": horario(hora="13:00"),
                         },
                         "id": "tc1",
                         "type": "tool_call",

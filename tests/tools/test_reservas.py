@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.db.models import Auditoria, Canal, Caso, Reserva, TipoCaso, Turno
 from app.tools.reservas import crear_reserva
+from tests.horarios import horario
 
 
 @pytest.fixture
@@ -28,11 +29,11 @@ async def test_crear_reserva_registra_caso_reserva_y_auditoria(
         ciudadano_id=ciudadano.id,
         canal=Canal.email,
         turno="renovación de licencia",
-        fecha_hora="2026-08-15 10:00",
+        fecha_hora=horario(),
     )
 
     assert resultado["turno"] == turno_licencia.nombre
-    assert resultado["fecha_hora"] == "2026-08-15 10:00"
+    assert resultado["fecha_hora"] == horario()
 
     caso = await db_session.get(Caso, uuid.UUID(resultado["caso_id"]))
     assert caso is not None
@@ -63,7 +64,7 @@ async def test_crear_reserva_con_turno_inexistente_lista_los_disponibles(
             ciudadano_id=ciudadano.id,
             canal=Canal.email,
             turno="turno de pádel",
-            fecha_hora="2026-08-15 10:00",
+            fecha_hora=horario(),
         )
 
 
@@ -98,7 +99,7 @@ async def test_crear_reserva_completa_el_caso_ya_abierto_en_vez_de_abrir_otro(
         ciudadano_id=ciudadano.id,
         canal=Canal.whatsapp,
         turno="renovación de licencia",
-        fecha_hora="2026-08-15 10:00",
+        fecha_hora=horario(),
         caso_id=ya_abierto.id,
     )
 

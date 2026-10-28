@@ -17,7 +17,7 @@ from app.db.crud.interacciones import (
     listar_interacciones_de_caso,
     ultimo_mensaje_al_ciudadano,
 )
-from app.db.crud.turnos import listar_nombres_de_turnos
+from app.db.crud.turnos import horario_de_atencion, listar_agendas
 from app.db.models import Canal, Ciudadano
 
 logger = logging.getLogger(__name__)
@@ -43,9 +43,17 @@ async def buscar_conocimiento(
     conocimiento = await buscar_documentos_relevantes(db, mensaje)
 
     if intencion == "reserva":
-        nombres = await listar_nombres_de_turnos(db)
-        if nombres:
-            conocimiento.append("Turnos disponibles para reservar: " + "; ".join(nombres))
+        agendas = await listar_agendas(db)
+        if agendas:
+            # La primera línea es la misma con la que se entrenó el modelo; la
+            # segunda le da la grilla, para que proponga horarios que existen.
+            conocimiento.append(
+                "Turnos disponibles para reservar: " + "; ".join(a.nombre for a in agendas)
+            )
+            conocimiento.append(
+                "Horarios de atención: "
+                + "; ".join(f"{a.nombre}, {horario_de_atencion(a)}" for a in agendas)
+            )
 
     return conocimiento
 
