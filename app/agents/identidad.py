@@ -59,3 +59,30 @@ def responde_con_su_identidad(identificado: bool, mensaje: str | None) -> bool:
     """Quien todavía no informó su DNI y manda uno está contestando el pedido de
     datos del agente: el mensaje continúa el caso y lo resuelve el ejecutor."""
     return not identificado and bool(DNI.search(mensaje or ""))
+
+
+# Un saludo o un agradecimiento con nombre: "Hola, Juan Pérez." / "Gracias Laura,".
+_SALUDO_CON_NOMBRE = re.compile(
+    r"\b((?i:hola|buen(?:os)?\s+d[ií]as?|buenas(?:\s+tardes|\s+noches)?|gracias|estimad[oa]))"
+    r"\s*,?\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñü]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñü]+){0,3})"
+)
+
+
+def sin_nombre_inventado(texto: str, conocido: str) -> str:
+    """Saca del saludo un nombre que no aparece en lo que el modelo vio.
+
+    Pasó en una prueba: ante un olor a gas, el modelo intentó registrar a un
+    "Juan Pérez" con un DNI inventado. El control de `dni_dicho` frenó el
+    registro, pero la respuesta final saludaba igual a "Juan Pérez". El modelo
+    solo puede saber el nombre por la conversación, así que todo nombre que no
+    esté en ella es inventado.
+    """
+    palabras_conocidas = set(re.findall(r"\w+", conocido.lower()))
+
+    def reemplazo(coincidencia: re.Match) -> str:
+        nombre = coincidencia.group(2).split()
+        if all(palabra.lower() in palabras_conocidas for palabra in nombre):
+            return coincidencia.group(0)
+        return coincidencia.group(1)
+
+    return _SALUDO_CON_NOMBRE.sub(reemplazo, texto)

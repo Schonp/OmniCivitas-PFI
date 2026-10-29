@@ -19,6 +19,7 @@ from app.agents.espera import nodo_espera
 from app.agents.intake import nodo_intake
 from app.agents.opciones import nodo_opciones
 from app.agents.saludo import nodo_saludo
+from app.agents.seguridad import con_aviso_de_seguridad, ofrece_dato_sensible
 from app.agents.state import AgentState
 from app.core.config import settings
 from app.db.crud.auditoria import registrar_auditoria
@@ -95,6 +96,11 @@ def _sin_definir(state: AgentState) -> bool:
 
 
 def decidir_ruta(state: AgentState) -> str:
+    # Una clave o una tarjeta no llega a nadie, ni al modelo ni a un operador:
+    # el ejecutor contesta con un texto fijo, antes de cualquier otra decisión.
+    if ofrece_dato_sensible(state.get("mensaje")):
+        return "ejecutor"
+
     # Cancelar o cambiar un turno no depende de cómo lo clasifique el intake ni
     # de que el caso abierto esté con una persona: lo resuelve el ejecutor por
     # código y actúa sobre la reserva, no sobre el caso de la conversación.
@@ -309,6 +315,7 @@ async def _abrir_caso(db: AsyncSession, final: AgentState) -> str | None:
 async def _persistir_resultado(db: AsyncSession, final: AgentState) -> None:
     caso_id = final.get("caso_id") or await _abrir_caso(db, final)
     if caso_id is None:
+        final["respuesta"] = con_aviso_de_seguridad(final["mensaje"], final.get("respuesta"))
         return
     # Que el canal reciba el id: la respuesta al ciudadano lo referencia.
     final["caso_id"] = caso_id
@@ -345,6 +352,11 @@ async def _persistir_resultado(db: AsyncSession, final: AgentState) -> None:
         final["respuesta"] = await anteponer_aviso(
             db, uuid.UUID(final["ciudadano_id"]), canal, final["respuesta"]
         )
+        # Después del aviso de IA, para que quede primero: quien cuenta una
+        # emergencia tiene que leer el número antes que cualquier otra cosa.
+        # Va acá y no en el ejecutor porque también cubre las derivaciones y
+        # la falla del modelo.
+        final["respuesta"] = con_aviso_de_seguridad(final["mensaje"], final["respuesta"])
         await crear_interaccion(
             db,
             caso_id=caso_uuid,

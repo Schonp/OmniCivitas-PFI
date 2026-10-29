@@ -26,7 +26,8 @@ from app.agents.state import AgentState
 from app.db.models import ActorInteraccion, Canal, Caso, TipoCaso
 from app.agents.contexto import obtener_ciudadano_por_canal
 from app.agents.eleccion import ETIQUETA_TIPO
-from app.agents.identidad import extraer_identidad
+from app.agents.identidad import extraer_identidad, sin_nombre_inventado
+from app.agents.seguridad import ofrece_dato_sensible, respuesta_dato_sensible
 from app.db.crud import ciudadanos
 from app.db.crud.turnos import ReservaNoDisponible, ahora_local, listar_agendas
 from app.db.models import Turno
@@ -584,6 +585,14 @@ async def _estado_al_sumar_contacto(
 
 
 async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
+    if ofrece_dato_sensible(state["mensaje"]):
+        # Ni el modelo ni un operador tienen que recibir una clave: se contesta
+        # con un texto fijo y no se sigue con el pedido de este mensaje.
+        return {
+            "resultado_ejecucion": None,
+            "caso_id": state.get("caso_id"),
+            "respuesta": respuesta_dato_sensible(bool(state.get("identificado"))),
+        }
     gestion = await atender_turno(state, db)
     if gestion is not None:
         return gestion
@@ -613,6 +622,12 @@ async def nodo_ejecutor(state: AgentState, db: AsyncSession) -> dict:
             db, resultado.get("ciudadano_id") or state.get("ciudadano_id")
         )
         resultado = {**resultado, "respuesta": sin_referencias_ajenas(respuesta, permitidas)}
+    respuesta = resultado.get("respuesta")
+    if respuesta:
+        conocido = " ".join(
+            [state["mensaje"]] + [e.get("contenido") or "" for e in state.get("historial") or []]
+        )
+        resultado = {**resultado, "respuesta": sin_nombre_inventado(respuesta, conocido)}
     return resultado
 
 

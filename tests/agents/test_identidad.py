@@ -1,6 +1,6 @@
 import pytest
 
-from app.agents.identidad import extraer_identidad, responde_con_su_identidad
+from app.agents.identidad import extraer_identidad, responde_con_su_identidad, sin_nombre_inventado
 
 
 @pytest.mark.parametrize(
@@ -30,3 +30,26 @@ def test_solo_cuenta_para_quien_no_esta_identificado():
     assert responde_con_su_identidad(False, "Laura, 30.111.292") is True
     assert responde_con_su_identidad(True, "Laura, 30.111.292") is False
     assert responde_con_su_identidad(False, "Hay un pozo en Rivadavia 3200") is False
+
+
+@pytest.mark.parametrize(
+    "texto,esperado",
+    [
+        (
+            "Hola, Juan Pérez. Tomé nota del olor a gas. Necesito su DNI.",
+            "Hola. Tomé nota del olor a gas. Necesito su DNI.",
+        ),
+        ("Gracias Juan, ya lo registré.", "Gracias, ya lo registré."),
+        ("Buen día, Marta. ¿En qué lo ayudo?", "Buen día. ¿En qué lo ayudo?"),
+    ],
+)
+def test_saca_del_saludo_un_nombre_que_nadie_dijo(texto, esperado):
+    """Pasó con el modelo real: saludó a un "Juan Pérez" que nadie nombró."""
+    conocido = "Hay mucho olor a gas en la esquina de Medrano y Córdoba"
+    assert sin_nombre_inventado(texto, conocido) == esperado
+
+
+def test_deja_el_nombre_que_dio_el_ciudadano():
+    conocido = "Laura Prueba, DNI 30111292"
+    texto = "Gracias, Laura. Ya registré sus datos."
+    assert sin_nombre_inventado(texto, conocido) == texto

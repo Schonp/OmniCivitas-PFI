@@ -871,5 +871,66 @@ para comparar con la v2.
 - [ ] Si se vuelve a entrenar: más conversaciones de identificación que pidan
       los datos primero, para que el modelo lo haga solo y la regla del código
       quede como red de seguridad.
-- [ ] Entrenar la v3 en Colab (el dataset ya trae las pautas), servirla y
-      medirla con `scripts/evaluar_modelo_local.py` contra la v2.
+
+## 2026-10-28 — Resultados de la tercera versión
+
+El notebook entrenó las 2 épocas y exportó el GGUF a Drive sin cortes (el
+armado del dataset falló una vez en Colab porque importaba la conexión a la
+base; la lectura de `conocimiento/` pasó a `scripts/archivos_conocimiento.py`,
+que no la necesita). En Colab, sobre las 67 de prueba: 94,0% exacto (63/67) y
+100% sin campos de texto libre.
+
+En Ollama quedan los tres: `omnicivitas-qwen` es la v3, `omnicivitas-qwen-v2`
+y `omnicivitas-qwen-v1`. Por el camino de la app, misma corrida, misma GPU
+(RTX 3050):
+
+| Modelo | Intención | Falsos positivos | Tool calling exacto | Sin texto libre | s/mensaje |
+|---|---|---|---|---|---|
+| v2 | 100% | 0 | 80,6% (54/67) | 97,0% (65/67) | 4,3 |
+| **v3** | **100%** | **0** | **77,6% (52/67)** | **98,5% (66/67)** | **4,3** |
+
+La v3 resuelve los dos errores de la v2 (la poda que tapa la luz sale
+`servicio`; la plaza llena de pozos se registra con el nombre de la plaza) y
+suma uno: "contenedor de reciclaje roto y desbordado" sale `servicio` en vez de
+`infraestructura`, un caso de borde porque el contenedor es parte de la
+recolección. La baja en exacto es toda de redacción: "reclamo de la semana
+pasada" por "reclamo semana pasada", "14 días" por "2 semanas". La v2 tenía las
+suyas ("Escombres", "calzada" por "calle").
+
+### Conversación real: las pautas se aplican a medias
+
+Con el modelo real por WhatsApp, el cable caído salió bien (primero el aviso,
+después los datos), igual que la pregunta por el intendente y el turno completo
+(reservar, cambiar, cancelar). Fallaron tres:
+
+- **Olor a gas**: ningún aviso, y saludó a un "Juan Pérez" que nadie nombró. El
+  control de `dni_dicho` frenó el registro con un DNI inventado, pero el texto
+  final usaba el nombre.
+- **"Mi pareja me está amenazando"**: lo derivó a una persona sin nombrar el
+  911 ni el 144.
+- **"¿Te paso la clave de Mi Argentina?"**: el intake lo clasificó trámite y se
+  derivó; la clave habría llegado a un operador.
+
+Los tres se resolvieron en el código, como el aviso de IA:
+
+- `app/agents/seguridad.py` detecta por palabras la emergencia (violencia,
+  persona lastimada, fuego, gas, cable caído, personas atrapadas) y antepone un
+  aviso fijo con el número que corresponde, salvo que la respuesta ya lo nombre.
+  Se aplica al persistir la respuesta, después del aviso de IA, así que queda
+  primero y cubre también las derivaciones y la falla del modelo. Las reglas son
+  acotadas a propósito: "es un abuso lo que cobran" no dispara nada.
+- Ofrecer una clave o la tarjeta va al ejecutor antes de cualquier otra ruta y
+  se contesta con un texto fijo, sin pasar por el modelo ni por un operador.
+  "¿Necesito clave fiscal?" es una consulta y no entra.
+- `sin_nombre_inventado` (`app/agents/identidad.py`) saca del saludo un nombre
+  que no aparece en la conversación: el modelo no tiene otra forma de saberlo.
+
+Repetidas las conversaciones, el gas y la amenaza llegan con el aviso adelante
+(el modelo igual deriva, que está bien) y la clave recibe la respuesta fija.
+
+### Qué queda
+
+- [ ] El mensaje con una clave igual queda guardado en las interacciones del
+      caso: falta enmascararla antes de persistir.
+- [ ] Si se vuelve a entrenar: más conversaciones de emergencias por gas y de
+      violencia, para que el modelo dé el aviso solo y la regla quede como red.
