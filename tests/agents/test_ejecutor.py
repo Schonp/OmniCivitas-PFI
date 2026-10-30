@@ -529,6 +529,166 @@ async def test_si_lo_pendiente_era_un_reclamo_lo_sigue_gestionando_el_modelo(
     assert modelo.bind_tools.return_value.ainvoke.await_count == 1
 
 
+async def test_f5_aunque_el_intake_haya_dicho_reclamo(db_session, mocker):
+    """Pasó con la v3: "¿cómo va el reclamo del pozo?" salió reclamo por la
+    palabra, y con el DNI se derivaba en vez de dar el estado. La pregunta por
+    el estado manda sobre el tipo, y el caso pasa a ser una consulta."""
+    from app.agents import ejecutor as mod
+    from app.db.models import TipoCaso
+
+    laura, provisorio, reclamo, pendiente = await _laura_por_whatsapp_y_correo_provisorio(
+        db_session, TipoCaso.reclamo
+    )
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(side_effect=AssertionError("no hace falta el modelo"))
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+
+    resultado = await mod.nodo_ejecutor(
+        _estado_f5(provisorio, pendiente, "Hola, ¿cómo va el reclamo del pozo?"), db_session
+    )
+
+    assert resultado["respuesta"].startswith("Gracias, Laura. Ya sumé este correo a su registro.")
+    assert reclamo.referencia in resultado["respuesta"]
+    await db_session.refresh(pendiente)
+    assert pendiente.tipo == TipoCaso.consulta
+
+
+async def test_un_contacto_nuevo_que_pregunta_por_su_caso_da_sus_datos(db_session, mocker):
+    """Contestarle "no encontré casos a su nombre" a quien inició el reclamo por
+    otro canal es falso: se le piden los datos para buscarlo."""
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+    from app.agents.confirmacion import pedido_de_identificacion_para_consulta
+    from app.db.models import Canal as _Canal
+    from app.db.models import Ciudadano
+
+    provisorio = Ciudadano(nombre="Laura", documento="PROV-NUEVO", email="nueva@correo.test")
+    db_session.add(provisorio)
+    await db_session.commit()
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        return_value=_AI(
+            content="",
+            tool_calls=[{"name": "consultar_estado_caso", "args": {"referencia": "reclamo del pozo"}, "id": "c1"}],
+        )
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+    estado = {
+        "mensaje": "¿Cómo va el reclamo del pozo?",
+        "canal": "email",
+        "identificador": "nueva@correo.test",
+        "ciudadano_id": str(provisorio.id),
+        "identificado": False,
+        "caso_id": None,
+        "historial": [],
+        "intencion": "reclamo",
+    }
+
+    resultado = await mod.nodo_ejecutor(estado, db_session)
+
+    assert resultado["respuesta"] == pedido_de_identificacion_para_consulta(_Canal.email)
+
+
+def test_si_el_modelo_inventa_datos_el_reclamo_va_con_las_palabras_del_ciudadano():
+    from app.agents.ejecutor import datos_inventados, descripcion_del_ciudadano
+
+    dichos = [
+        "Laura Prueba, DNI 30775211",
+        "Hola, hay un pozo enorme en Av. Rivadavia 3200 y ayer se cayó una moto",
+    ]
+    del_modelo = "Pozo en Av. Rivadavia 3200 entre Avellaneda y Belgrano"
+    assert datos_inventados(del_modelo, dichos)
+
+    assert descripcion_del_ciudadano(del_modelo, dichos) == (
+        "Hay un pozo enorme en Av. Rivadavia 3200 y ayer se cayó una moto"
+    )
+
+
+def test_sin_un_mensaje_que_cuente_lo_mismo_no_hay_descripcion_propia():
+    from app.agents.ejecutor import descripcion_del_ciudadano
+
+    dichos = ["Laura Prueba, DNI 30775211", "Quiero hacer un reclamo"]
+    assert descripcion_del_ciudadano("Pozo en Lavalle y Córdoba 1200", dichos) is None
+
+
+async def test_dos_reclamos_en_la_misma_respuesta_se_registran_una_vez(db_session, ciudadano, mocker):
+    """Pasó con la v3: dos `crear_reclamo` del mismo pozo y la confirmación
+    salía dos veces."""
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        return_value=_AI(
+            content="",
+            tool_calls=[
+                {
+                    "name": "crear_reclamo",
+                    "args": {"descripcion": "Pozo en Thames 1200", "categoria": "infraestructura"},
+                    "id": "c1",
+                },
+                {
+                    "name": "crear_reclamo",
+                    "args": {"descripcion": "Moto caída en pozo en Thames 1200", "categoria": "infraestructura"},
+                    "id": "c2",
+                },
+            ],
+        )
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+    estado = {
+        "mensaje": "Hay un pozo en Thames 1200 y se cayó una moto",
+        "canal": "email",
+        "identificador": ciudadano.email,
+        "ciudadano_id": str(ciudadano.id),
+        "identificado": True,
+        "caso_id": None,
+        "historial": [],
+        "intencion": "reclamo",
+    }
+
+    resultado = await mod.nodo_ejecutor(estado, db_session)
+
+    assert resultado["respuesta"].count("Número de caso") == 1
+
+
+async def test_a_quien_ya_esta_identificado_no_se_le_vuelven_a_pedir_los_datos(
+    db_session, ciudadano, mocker
+):
+    """Pasó con la v3: identificada por correo, preguntó para cuándo arreglaban
+    el pozo y el modelo le volvió a pedir nombre y DNI. Se corrige una vez; si
+    insiste, va un texto fijo."""
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+
+    pide_datos = _AI(content="Lo puedo consultar, pero necesito su nombre completo y su DNI.")
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        side_effect=[pide_datos, _AI(content="El bacheo se hace dentro de los 10 días hábiles.")]
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+    estado = {
+        "mensaje": "¿Y para cuándo calculan que lo arreglan?",
+        "canal": "email",
+        "identificador": ciudadano.email,
+        "ciudadano_id": str(ciudadano.id),
+        "identificado": True,
+        "caso_id": None,
+        "historial": [],
+        "intencion": "consulta",
+    }
+
+    resultado = await mod.nodo_ejecutor(estado, db_session)
+    assert resultado["respuesta"] == "El bacheo se hace dentro de los 10 días hábiles."
+
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(side_effect=[pide_datos, pide_datos])
+    resultado = await mod.nodo_ejecutor(estado, db_session)
+    assert resultado["respuesta"] == mod.NO_TENGO_ESE_DATO
+
+
 def test_se_quita_un_numero_de_caso_que_no_es_del_ciudadano():
     """Pasó con el modelo real: "Número de caso: REC-20194FB3" con el caso real
     REC-20194FB2."""

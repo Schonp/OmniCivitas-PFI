@@ -928,9 +928,40 @@ Los tres se resolvieron en el código, como el aviso de IA:
 Repetidas las conversaciones, el gas y la amenaza llegan con el aviso adelante
 (el modelo igual deriva, que está bien) y la clave recibe la respuesta fija.
 
+### Continuidad entre canales (F5) con la v3
+
+Con los canales reales andando (WhatsApp por la Cloud API y el correo por
+IMAP/SMTP), se repitió el recorrido de F5 con el modelo real: un pozo por
+WhatsApp, después "¿cómo va el reclamo del pozo?" por correo, el DNI y una
+pregunta más. Con la v3 se rompió en cuatro lugares, todos resueltos en el
+código:
+
+- Al identificarse por WhatsApp, el modelo le agregó al pozo tres calles que
+  nadie dijo; el control lo frenó, al reintentar volvió a inventar y derivó.
+  Ahora, si un mensaje del ciudadano cuenta lo mismo, el reclamo se registra
+  con sus palabras (`descripcion_del_ciudadano`). En otra corrida mandó dos
+  `crear_reclamo` del mismo pozo y la confirmación salía dos veces: se toma el
+  primero.
+- Por correo, sin identificar, buscó casos del contacto nuevo y contestó "no
+  encontré casos a su nombre". Ahora se le piden los datos para buscarlos.
+- El intake clasificó la pregunta como reclamo (por la palabra), y la respuesta
+  con el estado solo se daba si el caso era una consulta. Ahora alcanza con que
+  se le hayan pedido los datos para buscar sus casos, o con que la pregunta
+  pendiente sea por el estado; el caso pasa a ser una consulta.
+- Ya identificada, ante "¿para cuándo lo arreglan?" volvió a pedirle nombre y
+  DNI, copiando el pedido del historial. Se le corrige una vez y, si insiste,
+  va un texto fijo.
+
+Repetido, el recorrido sale entero: pide los datos, registra el reclamo, por
+correo pide los datos para buscar el caso, suma el correo y da el estado del
+reclamo del pozo. La última respuesta no trae el plazo del bacheo: "arreglan" no
+está en el documento de baches y la búsqueda léxica no lo encuentra.
+
 ### Qué queda
 
 - [ ] El mensaje con una clave igual queda guardado en las interacciones del
       caso: falta enmascararla antes de persistir.
 - [ ] Si se vuelve a entrenar: más conversaciones de emergencias por gas y de
       violencia, para que el modelo dé el aviso solo y la regla quede como red.
+- [ ] Que la búsqueda de conocimiento use también el asunto del caso del que se
+      habla ("¿para cuándo lo arreglan?" no nombra el pozo).

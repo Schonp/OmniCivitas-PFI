@@ -18,15 +18,17 @@ from app.agents.confirmacion import (
     confirmacion,
     dia_en_palabras,
     estado_de_casos,
+    MARCA_PEDIDO_PARA_CONSULTA,
     horario_no_disponible,
     pedido_de_dia_y_hora,
     pedido_de_identificacion,
+    pedido_de_identificacion_para_consulta,
 )
 from app.agents.state import AgentState
 from app.db.models import ActorInteraccion, Canal, Caso, TipoCaso
 from app.agents.contexto import obtener_ciudadano_por_canal
 from app.agents.eleccion import ETIQUETA_TIPO
-from app.agents.identidad import extraer_identidad, sin_nombre_inventado
+from app.agents.identidad import DNI, extraer_identidad, sin_nombre_inventado
 from app.agents.seguridad import ofrece_dato_sensible, respuesta_dato_sensible
 from app.db.crud import ciudadanos
 from app.db.crud.turnos import ReservaNoDisponible, ahora_local, listar_agendas
@@ -363,6 +365,33 @@ def datos_inventados(descripcion: str, dichos_del_ciudadano: list[str]) -> list[
     return faltantes
 
 
+_SALUDO_INICIAL = re.compile(
+    r"^\s*(?:hola|buen(?:os|as)?(?:\s+(?:d[ií]as?|tardes|noches))?)\b[\s,.!¡]*", re.IGNORECASE
+)
+_MIN_PALABRAS_EN_COMUN = 2
+
+
+def descripcion_del_ciudadano(descripcion: str, dichos_del_ciudadano: list[str]) -> str | None:
+    """El mensaje del ciudadano que cuenta lo mismo que la descripción del
+    modelo, para registrar el reclamo con sus palabras; None si ninguno alcanza.
+
+    Se descarta el mensaje con el DNI (es la respuesta al pedido de datos) y
+    se exige que comparta al menos dos palabras con lo que propuso el modelo.
+    """
+    clave = {p for p in re.findall(r"\w+", descripcion.lower()) if len(p) >= 4 or p.isdigit()}
+    mejor, en_comun = None, 0
+    for dicho in dichos_del_ciudadano:
+        if DNI.search(dicho):
+            continue
+        cantidad = len(clave & set(re.findall(r"\w+", dicho.lower())))
+        if cantidad > en_comun:
+            mejor, en_comun = dicho, cantidad
+    if mejor is None or en_comun < _MIN_PALABRAS_EN_COMUN:
+        return None
+    texto = _SALUDO_INICIAL.sub("", mejor).strip()
+    return texto[:1].upper() + texto[1:] if texto else None
+
+
 # Palabras de los nombres de agenda que no distinguen una de otra.
 _GENERICAS_DE_AGENDA = {
     "de", "del", "la", "el", "en", "y", "para", "turno", "turnos", "centro",
@@ -484,6 +513,16 @@ def dni_dicho(documento: str, dichos_del_ciudadano: list[str]) -> bool:
 
 _VUELVE_A_PEDIR_DATOS = re.compile(r"nombre completo|su DNI|número de documento", re.IGNORECASE)
 
+CORRECCION_YA_IDENTIFICADO = (
+    "(Nota interna, no la repitas: el ciudadano ya está identificado, no le pidas su "
+    "nombre ni su DNI. Respondé lo que pregunta con la información que tengas; si no "
+    "la tenés, decíselo.)"
+)
+NO_TENGO_ESE_DATO = (
+    "No tengo ese dato en este momento. Si quiere, lo derivo a una persona del equipo "
+    "para que se lo confirme."
+)
+
 DERIVAR = "derivar"
 
 
@@ -538,6 +577,13 @@ async def _registrar_identidad_del_mensaje(
     return nuevo, (llamada, salida)
 
 
+_PREGUNTA_POR_SU_CASO = re.compile(
+    r"\bc[oó]mo (?:va|sigue|anda|viene)\b|\bestado de\b|\bnovedad|\bqu[eé] pas[oó] con\b"
+    r"|\ben qu[eé] (?:qued[oó]|est[aá])\b",
+    re.IGNORECASE,
+)
+
+
 async def _estado_al_sumar_contacto(
     state: AgentState, db: AsyncSession, identidad: tuple[dict, dict]
 ) -> dict | None:
@@ -553,10 +599,39 @@ async def _estado_al_sumar_contacto(
     if not state.get("caso_id"):
         return None
     caso = await db.get(Caso, uuid.UUID(state["caso_id"]))
-    # Solo cuando la pregunta pendiente era una consulta: si había contado un
-    # reclamo o pedido un turno, eso lo sigue gestionando el modelo.
-    if caso is None or caso.tipo != TipoCaso.consulta:
+    # Solo cuando la pregunta pendiente era por sus casos: si había contado un
+    # reclamo o pedido un turno, eso lo sigue gestionando el modelo. No alcanza
+    # con el tipo del caso: el intake llegó a clasificar "¿cómo va el reclamo
+    # del pozo?" como reclamo, por la palabra.
+    if caso is None:
         return None
+    ultimo_del_agente = next(
+        (
+            e.get("contenido") or ""
+            for e in reversed(state.get("historial") or [])
+            if e.get("actor") != ActorInteraccion.ciudadano.value
+        ),
+        "",
+    )
+    ultimo_del_ciudadano = next(
+        (
+            e.get("contenido") or ""
+            for e in reversed(state.get("historial") or [])
+            if e.get("actor") == ActorInteraccion.ciudadano.value
+        ),
+        "",
+    )
+    if not (
+        caso.tipo == TipoCaso.consulta
+        or MARCA_PEDIDO_PARA_CONSULTA in ultimo_del_agente
+        or _PREGUNTA_POR_SU_CASO.search(ultimo_del_ciudadano)
+    ):
+        return None
+    if caso.tipo != TipoCaso.consulta:
+        # El caso de esta conversación se abrió con el tipo que adivinó el
+        # intake; era una pregunta por el estado, no un reclamo nuevo, y así
+        # tiene que verlo el operador en el panel.
+        caso.tipo = TipoCaso.consulta
     pregunta = " ".join(
         e.get("contenido") or ""
         for e in state.get("historial") or []
@@ -682,6 +757,7 @@ async def _resolver(
         if e.get("actor") == ActorInteraccion.ciudadano.value
     ]
 
+    corregido = False
     for _ in range(MAX_ITERACIONES):
         respuesta_llm: AIMessage = await modelo.ainvoke(mensajes)
 
@@ -707,10 +783,24 @@ async def _resolver(
                     "requiere_escalado": True,
                     "motivo_escalado": "sin_herramienta",
                 }
+            texto = _texto(respuesta_llm)
+            # Quien se identificó en este mismo mensaje tiene su propio arreglo
+            # en `nodo_ejecutor` (el agradecimiento y "ya registré sus datos").
+            if identificado and not state.get("recien_identificado") and _VUELVE_A_PEDIR_DATOS.search(texto):
+                # Pasó con la v3: ya identificada por correo, Laura preguntó
+                # para cuándo arreglaban el pozo y el modelo le volvió a pedir
+                # nombre y DNI, copiando el pedido que tenía en el historial.
+                # Se le corrige una vez; si insiste, va un texto fijo.
+                if not corregido:
+                    corregido = True
+                    mensajes.append(respuesta_llm)
+                    mensajes.append(HumanMessage(content=CORRECCION_YA_IDENTIFICADO))
+                    continue
+                texto = NO_TENGO_ESE_DATO
             return {
                 "resultado_ejecucion": resultado_ejecucion or None,
                 "caso_id": caso_id,
-                "respuesta": _texto(respuesta_llm),
+                "respuesta": texto,
             }
 
         mensajes.append(respuesta_llm)
@@ -728,7 +818,14 @@ async def _resolver(
         llamadas = sorted(
             respuesta_llm.tool_calls, key=lambda c: c["name"] != "registrar_identidad"
         )
+        gestionadas: set[str] = set()
         for tool_call in llamadas:
+            if tool_call["name"] in GESTIONES and tool_call["name"] in gestionadas:
+                # Pasó con la v3: dos `crear_reclamo` en la misma respuesta, con
+                # dos redacciones del mismo pozo. Caen en el mismo caso de la
+                # conversación y el ciudadano recibía la confirmación dos veces.
+                logger.warning("ejecutor: se ignora un segundo %s en la misma respuesta", tool_call["name"])
+                continue
             if tool_call["name"] in GESTIONES and not identificado:
                 # La instrucción del prompt pide los datos antes de gestionar,
                 # pero el modelo a veces crea el reclamo igual. Acá no depende
@@ -789,6 +886,16 @@ async def _resolver(
                     }
             if tool_call["name"] == "crear_reclamo":
                 inventados = datos_inventados(tool_call["args"].get("descripcion") or "", dichos)
+                propia = descripcion_del_ciudadano(tool_call["args"].get("descripcion") or "", dichos) if inventados else None
+                if propia:
+                    # Pasó con la v3: después de identificarse, el modelo le
+                    # agregó al pozo de Rivadavia tres calles que nadie dijo, el
+                    # control lo frenó y al reintentar volvió a inventar y
+                    # derivó. Si el ciudadano ya contó el problema, se registra
+                    # con sus palabras, que no pueden tener nada inventado.
+                    logger.warning("ejecutor: descripción con datos no dichos %s; va la del ciudadano", inventados)
+                    tool_call["args"]["descripcion"] = propia
+                    inventados = []
                 if inventados:
                     # No se ejecuta: el modelo recibe el motivo y pregunta en
                     # vez de registrar un reclamo con datos que nadie dio.
@@ -849,6 +956,7 @@ async def _resolver(
                 salida = {"error": "La acción falló, intente de otra forma."}
             else:
                 exitosas.append((tool_call, salida if isinstance(salida, dict) else {}))
+                gestionadas.add(tool_call["name"])
                 if tool_call["name"] == "registrar_identidad":
                     identificado = True
                     identidad = exitosas[-1]
@@ -863,6 +971,21 @@ async def _resolver(
                         tools_por_nombre = {t.name: t for t in tools}
                         modelo = llm.get_llm_ejecutor().bind_tools(tools)
 
+            if (
+                tool_call["name"] == "consultar_estado_caso"
+                and not identificado
+                and isinstance(salida, dict)
+                and not salida.get("tiene_casos")
+            ):
+                # Un contacto nuevo que pregunta por "el reclamo del pozo" lo
+                # inició por otro canal: contestarle "no encontré casos a su
+                # nombre" es falso. Se le piden los datos, y con el DNI se
+                # suma el contacto y se le da el estado (caso funcional F5).
+                return {
+                    "resultado_ejecucion": resultado_ejecucion or None,
+                    "caso_id": caso_id,
+                    "respuesta": pedido_de_identificacion_para_consulta(Canal(state["canal"])),
+                }
             if isinstance(salida, dict):
                 resultado_ejecucion[tool_call["name"]] = salida
                 caso_id = salida.get("caso_id", caso_id)

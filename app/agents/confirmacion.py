@@ -110,6 +110,22 @@ def pedido_de_identificacion(nombre: str, canal: Canal) -> str:
     )
 
 
+# Marca del pedido de datos para buscar casos: en el turno siguiente, con el
+# DNI, se contesta con el estado de sus casos (`_estado_al_sumar_contacto`).
+MARCA_PEDIDO_PARA_CONSULTA = "Para buscar sus casos"
+
+
+def pedido_de_identificacion_para_consulta(canal: Canal) -> str:
+    """Quien pregunta por su caso desde un contacto que todavía no está a nombre
+    de nadie: casi siempre lo inició por otro canal."""
+    if canal == Canal.voz:
+        return (
+            f"{MARCA_PEDIDO_PARA_CONSULTA} necesito su nombre completo y su número de "
+            "documento. ¿Me los dice?"
+        )
+    return f"{MARCA_PEDIDO_PARA_CONSULTA} necesito su nombre completo y su DNI.\n\n¿Me los indica?"
+
+
 def agradecimiento(salida_identidad: dict) -> str:
     """Prefijo cuando el ciudadano se identificó en el mismo mensaje."""
     nombre = (salida_identidad.get("nombre") or "").split()
