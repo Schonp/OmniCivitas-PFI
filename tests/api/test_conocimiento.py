@@ -61,6 +61,45 @@ async def test_conocimiento_relevante_entra_al_contexto(client, db_session, auth
     assert not any("Poda" in fragmento for fragmento in fragmentos)
 
 
+async def test_si_el_mensaje_no_nombra_el_tema_lo_completa_la_conversacion(db_session):
+    """Pasó con el modelo real: "¿y para cuándo lo arreglan?" no nombra el pozo
+    y el agente no tenía el plazo del bacheo."""
+    from app.db.models import DocumentoConocimiento
+
+    db_session.add_all([
+        DocumentoConocimiento(
+            titulo="Baches, pozos y hundimientos en la calzada",
+            contenido="El bacheo común se ejecuta dentro de los 10 días hábiles.",
+        ),
+        DocumentoConocimiento(titulo="Poda de árboles", contenido="Se solicita en la comuna."),
+    ])
+    await db_session.commit()
+    mensaje = "¿Y para cuándo calculan que lo arreglan?"
+    conversacion = "Su reclamo por pozo en la calzada en Av. Rivadavia 3200 está registrado."
+
+    assert await buscar_conocimiento(db_session, "consulta", mensaje) == []
+    fragmentos = await buscar_conocimiento(db_session, "consulta", mensaje, conversacion)
+
+    assert any("10 días hábiles" in f for f in fragmentos)
+    assert not any("Poda" in f for f in fragmentos)
+
+
+async def test_lo_que_dice_el_mensaje_va_antes_que_la_conversacion(db_session):
+    from app.db.models import DocumentoConocimiento
+
+    db_session.add_all([
+        DocumentoConocimiento(titulo="Baches y pozos", contenido="Bacheo en 10 días hábiles."),
+        DocumentoConocimiento(titulo="Poda de árboles", contenido="Ramas que tocan cables."),
+    ])
+    await db_session.commit()
+
+    fragmentos = await buscar_conocimiento(
+        db_session, "consulta", "¿Y la poda del árbol de enfrente?", "Su reclamo por el pozo"
+    )
+
+    assert fragmentos[0].startswith("Poda de árboles")
+
+
 async def test_intencion_reserva_agrega_turnos_disponibles(db_session):
     db_session.add(Turno(nombre="Renovación de DNI", descripcion="Documentación."))
     await db_session.commit()

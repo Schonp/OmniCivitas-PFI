@@ -954,14 +954,55 @@ código:
 
 Repetido, el recorrido sale entero: pide los datos, registra el reclamo, por
 correo pide los datos para buscar el caso, suma el correo y da el estado del
-reclamo del pozo. La última respuesta no trae el plazo del bacheo: "arreglan" no
-está en el documento de baches y la búsqueda léxica no lo encuentra.
+reclamo del pozo.
+
+La última respuesta no traía el plazo del bacheo: "¿para cuándo lo arreglan?"
+no nombra el pozo y la búsqueda léxica, que solo miraba el mensaje, no traía el
+documento de baches. Ahora, si el mensaje no llena los tres lugares, se
+completan con los dos últimos mensajes del caso (`buscar_conocimiento`). Van
+después de lo que trajo el mensaje, no mezclados: lo que pregunta ahora manda.
+Repetido, contesta "El bacheo común se ejecuta dentro de los 10 días hábiles" y
+el estado del reclamo.
+
+### Cuarta versión del dataset
+
+Todo lo que falló con la v3 en las conversaciones reales ya tiene su red en el
+código; la v4 es para que el modelo lo haga bien solo y la red quede de
+respaldo. Suma 237 conversaciones (213 en train y 24 en validación: quedan
+2996 y 397):
+
+- 60 reclamos en el turno después del pedido de datos, como lo ve hoy el
+  modelo: la identidad ya la registró el código, el reclamo está en el
+  historial. Una sola llamada, con lo que contó el vecino ("se cayó una moto"
+  entra; una calle que no dijo, no). En el 30% no dio la dirección, y se le
+  pide.
+- 40 preguntas por su caso desde un contacto sin identificar: se le piden los
+  datos para buscarlo, con el mismo texto que arma el código.
+- 60 preguntas de seguimiento ya identificado ("¿y para cuándo lo arreglan?"),
+  con el documento del organismo en el prompt: se contesta con el plazo del
+  documento. En el 20% el documento no está y se le dice que no se tiene el
+  dato, sin pedirle el DNI.
+- 35 de intake: "¿cómo va el reclamo del pozo?" es una consulta, y la
+  pregunta de seguimiento también.
+- 42 emergencias por gas y de violencia, con el mismo aviso que antepone
+  `app/agents/seguridad.py`.
+
+Los textos que ya arma el código (avisos, pedidos de datos, "no tengo ese
+dato") se importan de `app/`, y los documentos de
+`scripts/documentos_de_ejemplo.py`, separados de `seed_conocimiento.py` para no
+importar la base en Colab. La conversación más larga mide 2433 tokens (la v3,
+2439), dentro de los 2560 del entrenamiento. El conjunto de prueba no cambia.
+
+Quedó a la vista un problema del dataset original: algunos ejemplos manuales
+de consulta contestan plazos sin información del organismo en el prompt, y dos
+contradicen los documentos (alumbrado en 10 días hábiles contra 5; atención de
+8 a 14 contra 8 a 15). No se tocaron en esta versión.
 
 ### Qué queda
 
 - [ ] El mensaje con una clave igual queda guardado en las interacciones del
       caso: falta enmascararla antes de persistir.
-- [ ] Si se vuelve a entrenar: más conversaciones de emergencias por gas y de
-      violencia, para que el modelo dé el aviso solo y la regla quede como red.
-- [ ] Que la búsqueda de conocimiento use también el asunto del caso del que se
-      habla ("¿para cuándo lo arreglan?" no nombra el pozo).
+- [ ] Entrenar la v4 en Colab, servirla y medirla contra la v3 por el camino de
+      la app, y repetir las conversaciones reales.
+- [ ] Decidir qué hacer con los ejemplos manuales que contestan plazos sin
+      información del organismo (alinearlos con los documentos o sacarlos).

@@ -35,6 +35,16 @@ que en producción, y hay conversaciones donde aplicarlas cambia la respuesta
 traen la grilla de cada agenda en la información del organismo, como la arma
 hoy el agente de contexto.
 
+La cuarta versión suma lo que falló con la v3 en conversaciones reales por
+WhatsApp y correo: el reclamo después del pedido de datos (una sola llamada,
+sin agregar calles que nadie dijo), la pregunta por su caso desde un contacto
+sin identificar (se le piden los datos para buscarlo), la pregunta de
+seguimiento ya identificado (se contesta con la información del organismo, sin
+volver a pedir el DNI), "¿cómo va el reclamo?" como consulta en el intake, y
+más emergencias por gas y de violencia. Las respuestas que el código ya arma
+(los avisos, los pedidos de datos) se importan de `app/`: el modelo aprende el
+mismo texto que usa la red de seguridad.
+
 Uso, desde la raíz del repo con las dependencias de la app instaladas y después
 de `finetuning/armar_dataset.py`:
 
@@ -56,8 +66,11 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from app.agents.ejecutor import construir_tools, prompt_del_sistema
+from app.agents.confirmacion import pedido_de_identificacion, pedido_de_identificacion_para_consulta
+from app.agents.ejecutor import NO_TENGO_ESE_DATO, construir_tools, prompt_del_sistema
+from app.agents.seguridad import aviso_de_seguridad
 from scripts.archivos_conocimiento import CARPETA_CONOCIMIENTO, leer_carpeta
+from scripts.documentos_de_ejemplo import DOCUMENTOS
 from app.agents.intake import SYSTEM_INTAKE, _formatear_historial
 from app.agents.llm import a_formato_qwen
 from app.db.models import Canal
@@ -651,6 +664,240 @@ def intake_emergencias() -> list[dict]:
     return salida
 
 
+# --- Cuarta versión: lo que falló con la v3 en conversaciones reales -----------
+
+# Lo que agrega el vecino al reclamo, y cómo queda en la descripción. Con la v3,
+# "y ayer se cayó una moto" terminó en una descripción con tres calles que nadie
+# dijo: la descripción usa solo lo que contó.
+DETALLES = [
+    ("y ayer se cayó una moto", "se cayó una moto"),
+    ("y ya hubo dos accidentes", "ya hubo dos accidentes"),
+    ("desde hace una semana", "desde hace una semana"),
+    ("y es peligroso para los chicos", "es peligroso para los chicos"),
+    ("y nadie vino a verlo", "nadie vino a verlo"),
+]
+RESPUESTAS_CON_DNI = ["{n}, DNI {d}", "{n}, {d}", "Soy {n}, mi DNI es {d}", "{n} DNI {d}"]
+
+
+def reclamos_tras_identificarse(n: int) -> list[dict]:
+    """El turno después del pedido de datos, tal como lo ve el modelo hoy: el
+    código ya registró la identidad (el prompt dice identificado) y el reclamo
+    está en el historial. Una sola llamada, con lo que dijo el ciudadano; si no
+    dio la dirección, se le pide en vez de inventarla."""
+    salida = []
+    for _ in range(n):
+        canal = random.choice([Canal.whatsapp, Canal.whatsapp, Canal.email, Canal.voz])
+        frase, formal, categoria = random.choice(RECLAMOS_INCOMPLETOS)
+        nombre = random.choice(NOMBRES)
+        dicho, _ = _dni()
+        datos = HumanMessage(content=random.choice(RESPUESTAS_CON_DNI).format(n=nombre, d=dicho))
+        pedido = AIMessage(content=pedido_de_identificacion("crear_reclamo", canal))
+        if random.random() < 0.3:
+            turnos = [
+                HumanMessage(content=f"{frase.capitalize()} {random.choice(VAGOS)}"),
+                pedido,
+                datos,
+                AIMessage(content=random.choice(PIDE_DIRECCION)),
+            ]
+        else:
+            direccion = f"{random.choice(CALLES)} {random.randint(100, 5000)}"
+            detalle, detalle_formal = random.choice(DETALLES) if random.random() < 0.6 else ("", "")
+            contado = f"{frase.capitalize()} en {direccion} {detalle}".strip()
+            descripcion = f"{formal} en {direccion}" + (f", {detalle_formal}" if detalle_formal else "")
+            reclamo = _llamada("crear_reclamo", {"descripcion": descripcion, "categoria": categoria})
+            turnos = [
+                HumanMessage(content=random.choice([contado, f"Hola, {frase} en {direccion} {detalle}".strip()])),
+                pedido,
+                datos,
+                AIMessage(content="", tool_calls=[reclamo]),
+            ]
+        salida.append(conversacion_ejecutor(turnos, intencion="reclamo", canal=canal))
+    return salida
+
+
+PREGUNTAS_POR_SU_CASO = [
+    "¿Cómo va el reclamo del pozo?", "Hola, les escribo por correo. ¿Cómo va mi reclamo?",
+    "¿Qué pasó con el reclamo de la luz que hice?", "¿En qué quedó mi trámite?",
+    "¿Hay novedades de mi reclamo?", "¿Cómo sigue lo del árbol caído?",
+    "Quería saber el estado de mi reclamo", "¿Me confirman si sigue en pie mi turno?",
+    "Hice un reclamo por WhatsApp, ¿cómo va?", "¿Tienen novedades de lo que reclamé la semana pasada?",
+]
+
+
+def consultas_sin_identificar(n: int) -> list[dict]:
+    """Un contacto que todavía no está a nombre de nadie pregunta por su caso:
+    casi siempre lo inició por otro canal. Se le piden los datos para buscarlo
+    (el mismo texto que arma el código), no "no encontré casos"."""
+    salida = []
+    for _ in range(n):
+        canal = random.choice([Canal.whatsapp, Canal.email, Canal.email, Canal.voz])
+        turnos = [
+            HumanMessage(content=random.choice(PREGUNTAS_POR_SU_CASO)),
+            AIMessage(content=pedido_de_identificacion_para_consulta(canal)),
+        ]
+        # El intake a veces la clasifica reclamo por la palabra: las dos.
+        intencion = random.choice(["consulta", "consulta", "reclamo"])
+        salida.append(conversacion_ejecutor(turnos, intencion=intencion, canal=canal, identificado=False))
+    return salida
+
+
+def _documento(titulo: str) -> str:
+    """Un documento de la base tal como lo arma `buscar_documentos_relevantes`."""
+    contenido = dict(DOCUMENTOS)[titulo]
+    return f"{titulo}: {contenido}"
+
+
+# (tipo, de qué trata, documento que lo responde, preguntas de seguimiento,
+# respuesta a partir de ese documento). Los plazos salen de los documentos de
+# `scripts/documentos_de_ejemplo.py`, que son los que carga la demo.
+SEGUIMIENTOS = [
+    ("reclamo", "pozo en la calzada en {d}", "Baches, pozos y hundimientos en la calzada",
+     ["¿Y para cuándo lo arreglan?", "¿Cuánto tardan en arreglarlo?", "¿Y en cuántos días lo tapan?"],
+     "El bacheo común se hace dentro de los 10 días hábiles. Si el pozo impide el paso de "
+     "peatones o deja hierros expuestos, se atiende como urgente."),
+    ("reclamo", "luminaria apagada en {d}", "Alumbrado público: luminarias apagadas o dañadas",
+     ["¿Cuándo vienen a arreglar la luz?", "¿Y cuánto tarda eso?"],
+     "El plazo de reparación del alumbrado es de 5 días hábiles. Si hay riesgo eléctrico, "
+     "como un cable caído, se atiende dentro de las 24 horas."),
+    ("reclamo", "desagüe tapado en {d}", "Pérdidas de agua, cloacas y desagües tapados",
+     ["¿Cuándo lo destapan?", "¿Y para cuándo calculan que vienen?"],
+     "Los sumideros tapados se limpian dentro de las 72 horas. Si el agua inunda la calzada "
+     "o compromete una vivienda, se atiende como urgencia."),
+    ("reclamo", "ramas que tapan la luminaria en {d}", "Poda de árboles y ramas caídas",
+     ["¿Cuándo vienen a podar?", "¿Y para cuándo la poda?"],
+     "La poda programada se hace entre mayo y agosto. Si el árbol está caído o con riesgo "
+     "de caerse, se atiende como urgencia dentro de las 24 horas."),
+    ("reclamo", "no pasa el camión de la basura en {d}", "Recolección de residuos, basura y contenedores",
+     ["¿A qué hora pasa el camión?", "¿Y qué días pasa?"],
+     "La recolección domiciliaria pasa de lunes a sábado entre las 20 y las 23, y los "
+     "reciclables se retiran martes y viernes."),
+    ("reserva", "turno de licencia de conducir", "Licencia de conducir por primera vez",
+     ["¿Y qué tengo que llevar?", "¿Qué papeles necesito para ese turno?"],
+     "Para la licencia por primera vez necesita DNI vigente, certificado de grupo sanguíneo, "
+     "libre deuda de infracciones y el curso teórico aprobado."),
+    ("tramite", "habilitación de un local comercial", "Habilitación de comercios minoristas",
+     ["¿Cuánto tarda la habilitación?", "¿Y en cuánto sale?"],
+     "La habilitación simplificada resuelve en 15 días hábiles los locales de menos de 200 "
+     "metros cuadrados."),
+]
+
+
+PALABRA_DEL_TIPO = {"reclamo": "reclamo", "reserva": "turno", "tramite": "trámite"}
+
+
+def _pregunta_por(tipo: str) -> str:
+    """La pregunta por el estado nombrando el mismo tipo de caso que se contesta."""
+    return random.choice([
+        "¿Cómo va mi {t}?", "¿Hay novedades de mi {t}?", "Quería saber el estado de mi {t}",
+        "Hola, ¿en qué quedó mi {t}?",
+    ]).format(t=PALABRA_DEL_TIPO[tipo])
+
+
+def seguimientos(n: int) -> list[dict]:
+    """Ya identificado y con el estado de su caso en el historial, pregunta algo
+    más. Con la v3, el modelo le volvía a pedir nombre y DNI. Se contesta con la
+    información del organismo; si no está, se le dice (el mismo texto que usa
+    el código cuando el modelo insiste)."""
+    salida = []
+    for _ in range(n):
+        tipo, de_que, titulo, preguntas, respuesta = random.choice(SEGUIMIENTOS)
+        de_que = de_que.format(d=f"{random.choice(CALLES)} {random.randint(100, 5000)}")
+        caso = _caso(tipo, de_que, random.choice(["abierto", "en_progreso"]))
+        estado = (
+            f"Su {tipo} por {de_que} {ESTADO_EN_PALABRAS[caso['estado']]}.\n\n"
+            f"Número de caso: {caso['referencia']}"
+        )
+        otro = random.choice([t for t, _ in DOCUMENTOS if t != titulo])
+        if random.random() < 0.2:
+            conocimiento, final = [_documento(otro)], NO_TENGO_ESE_DATO
+        else:
+            conocimiento = [_documento(titulo)] + ([_documento(otro)] if random.random() < 0.5 else [])
+            random.shuffle(conocimiento)
+            final = respuesta
+        turnos = [
+            HumanMessage(content=_pregunta_por(tipo)),
+            AIMessage(content=estado),
+            HumanMessage(content=random.choice(preguntas)),
+            AIMessage(content=final),
+        ]
+        salida.append(conversacion_ejecutor(
+            turnos, intencion="consulta", canal=random.choice([Canal.whatsapp, Canal.email]),
+            conocimiento=conocimiento,
+        ))
+    return salida
+
+
+def intake_consultas_de_estado() -> list[dict]:
+    """Preguntar por un reclamo es una consulta, aunque diga "reclamo": con la
+    v3, "¿cómo va el reclamo del pozo?" salía reclamo."""
+    salida = []
+    for pregunta in PREGUNTAS_POR_SU_CASO:
+        for _ in range(2):
+            salida.append(conversacion_intake(pregunta, intencion="consulta", confianza=0.9))
+    for tipo, de_que, _, preguntas, _ in SEGUIMIENTOS:
+        de_que = de_que.format(d=f"{random.choice(CALLES)} {random.randint(100, 5000)}")
+        historial = [
+            {"actor": "ciudadano", "contenido": _pregunta_por(tipo)},
+            {"actor": "agente_ia", "contenido": f"Su {tipo} por {de_que} {ESTADO_EN_PALABRAS['abierto']}."},
+        ]
+        for pregunta in preguntas:
+            salida.append(conversacion_intake(pregunta, intencion="consulta", confianza=0.9, historial=historial))
+    return salida
+
+
+# Las emergencias que la v3 contestó sin aviso. El aviso es el mismo que
+# antepone el código (`app/agents/seguridad.py`), para que lo que aprende el
+# modelo y la red de seguridad digan lo mismo.
+GAS = [
+    ("hay mucho olor a gas en la esquina", "Olor a gas en la vía pública"),
+    ("sale olor a gas de una cámara de la vereda", "Olor a gas en una cámara de la vereda"),
+    ("huele a gas en toda la cuadra", "Olor a gas en la cuadra"),
+    ("hay una pérdida de gas en la calle", "Pérdida de gas en la vía pública"),
+]
+VIOLENCIA_V4 = [
+    "Mi ex me amenaza por mensajes todos los días",
+    "Mi marido me pega y no sé qué hacer",
+    "Escucho que en el departamento de al lado le pegan a una mujer",
+    "Tengo miedo, mi pareja me está amenazando",
+    "Me están amenazando y no sé a dónde recurrir",
+    "Mi hermana sufre violencia de su novio, ¿cómo la ayudo?",
+]
+
+
+def emergencias_v4(n_gas: int) -> list[dict]:
+    salida = []
+    for _ in range(n_gas):
+        frase, formal = random.choice(GAS)
+        mensaje, direccion = _con_direccion(frase)
+        aviso, _ = aviso_de_seguridad(mensaje)
+        if random.random() < 0.5:
+            turnos = [
+                HumanMessage(content=mensaje),
+                AIMessage(content=(
+                    f"{aviso} Tomé nota de lo que pasa en {direccion}. Para registrar el reclamo a su "
+                    "nombre necesito su nombre completo y su DNI."
+                )),
+            ]
+            salida.append(conversacion_ejecutor(
+                turnos, intencion="reclamo", identificado=False, canal=Canal.whatsapp, pautas=PAUTAS,
+            ))
+        else:
+            reclamo = _llamada(
+                "crear_reclamo", {"descripcion": f"{formal} en {direccion}", "categoria": "infraestructura"}
+            )
+            turnos = [HumanMessage(content=mensaje), AIMessage(content=aviso, tool_calls=[reclamo])]
+            salida.append(conversacion_ejecutor(turnos, intencion="reclamo", pautas=PAUTAS))
+    for mensaje in VIOLENCIA_V4:
+        aviso, _ = aviso_de_seguridad(mensaje)
+        for canal in (Canal.whatsapp, Canal.email):
+            turnos = [
+                HumanMessage(content=mensaje),
+                AIMessage(content=f"{aviso} ¿Quiere que lo atienda una persona del equipo?"),
+            ]
+            salida.append(conversacion_ejecutor(turnos, intencion="consulta", canal=canal, pautas=PAUTAS))
+    return salida
+
+
 # --- Armado ------------------------------------------------------------------
 
 
@@ -692,6 +939,11 @@ def _nuevos() -> list[dict]:
         + emergencias(60)
         + trato()
         + intake_emergencias()
+        + reclamos_tras_identificarse(60)
+        + consultas_sin_identificar(40)
+        + seguimientos(60)
+        + intake_consultas_de_estado()
+        + emergencias_v4(30)
     )
 
 

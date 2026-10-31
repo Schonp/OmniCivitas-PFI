@@ -12,7 +12,11 @@ from app.db.crud.ciudadanos import (
     obtener_ciudadano_por_email,
     obtener_ciudadano_por_telefono,
 )
-from app.db.crud.conocimiento import buscar_documentos_relevantes, listar_pautas_generales
+from app.db.crud.conocimiento import (
+    MAX_DOCUMENTOS_CONTEXTO,
+    buscar_documentos_relevantes,
+    listar_pautas_generales,
+)
 from app.db.crud.interacciones import (
     listar_interacciones_de_caso,
     ultimo_mensaje_al_ciudadano,
@@ -23,6 +27,7 @@ from app.db.models import Canal, Ciudadano
 logger = logging.getLogger(__name__)
 
 HISTORIAL_MAX_INTERACCIONES = 10
+ULTIMOS_PARA_BUSCAR = 2
 
 
 async def obtener_ciudadano_por_canal(
@@ -34,13 +39,27 @@ async def obtener_ciudadano_por_canal(
 
 
 async def buscar_conocimiento(
-    db: AsyncSession, intencion: str | None, mensaje: str
+    db: AsyncSession, intencion: str | None, mensaje: str, conversacion: str = ""
 ) -> list[str]:
     """Contexto del organismo para el ejecutor: documentos de la base de
     conocimiento que mencionan palabras del mensaje (recuperación léxica, ver
     buscar_documentos_relevantes) y, si la intención es reservar, las agendas
-    de turnos disponibles para que la tool reciba un nombre válido."""
+    de turnos disponibles para que la tool reciba un nombre válido.
+
+    Si el mensaje no llena los lugares, se completan con lo último de la
+    conversación. Pasó con el modelo real: "¿y para cuándo lo arreglan?",
+    después de que el agente le diera el estado del reclamo del pozo, no nombra
+    el pozo, no traía el documento de baches y el agente no sabía el plazo. Va
+    después del mensaje y no mezclado con él: lo que pregunta ahora manda, y
+    las palabras de la conversación solo completan.
+    """
     conocimiento = await buscar_documentos_relevantes(db, mensaje)
+    if conversacion and len(conocimiento) < MAX_DOCUMENTOS_CONTEXTO:
+        for fragmento in await buscar_documentos_relevantes(db, conversacion):
+            if len(conocimiento) >= MAX_DOCUMENTOS_CONTEXTO:
+                break
+            if fragmento not in conocimiento:
+                conocimiento.append(fragmento)
 
     if intencion == "reserva":
         agendas = await listar_agendas(db)
@@ -127,7 +146,12 @@ async def nodo_contexto(state: AgentState, db: AsyncSession) -> dict:
             for i in interacciones
         ]
 
-    conocimiento = await buscar_conocimiento(db, state.get("intencion"), state["mensaje"])
+    # Lo último que se dijo en el caso: el mensaje anterior del ciudadano y la
+    # respuesta que recibió, que es donde está el tema si ahora no lo nombra.
+    conversacion = " ".join(e["contenido"] or "" for e in historial[-ULTIMOS_PARA_BUSCAR:])
+    conocimiento = await buscar_conocimiento(
+        db, state.get("intencion"), state["mensaje"], conversacion
+    )
 
     return {
         "ciudadano_id": str(ciudadano.id),
