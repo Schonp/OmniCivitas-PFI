@@ -11,6 +11,9 @@ from app.agents.identidad import extraer_identidad, responde_con_su_identidad, s
         ("Mi nombre es Marta Ruiz y mi DNI es 28.456.789", ("Marta Ruiz", "28456789")),
         ("soy laura prueba dni 30111292", ("Laura Prueba", "30111292")),
         ("Hay un pozo en Rivadavia 3200, soy Juan Pérez DNI 30111222", ("Juan Pérez", "30111222")),
+        # Por voz, el reconocimiento lo transcribe con guiones o espacios.
+        ("Me llamo Laura Prueba y mi documento es 30-885-211.", ("Laura Prueba", "30885211")),
+        ("Laura Prueba, 30 885 211", ("Laura Prueba", "30885211")),
         # Solo el número: no hay nombre que leer.
         ("30111292", (None, "30111292")),
         # Cuenta otra cosa además: no se adivina qué parte es el nombre.
@@ -21,7 +24,15 @@ def test_extrae_nombre_y_documento(texto, esperado):
     assert extraer_identidad(texto) == esperado
 
 
-@pytest.mark.parametrize("texto", ["Hola, quiero un turno para el 12/11 a las 10", "Rivadavia 3200", "Mi teléfono es 1133334444"])
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Hola, quiero un turno para el 12/11 a las 10",
+        "Rivadavia 3200",
+        "Mi teléfono es 1133334444",
+        "Mi teléfono es 11-4567-8901",
+    ],
+)
 def test_sin_dni_no_hay_identidad(texto):
     assert extraer_identidad(texto) is None
 

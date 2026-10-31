@@ -31,7 +31,11 @@ eSpeak-NG.eSpeak-NG` y agregar `C:\Program Files\eSpeak NG` al PATH.
 Endpoints:
 - `GET /health`
 - `POST /transcribir` — multipart, campo `audio` (archivo) → `{"texto", "idioma", "confianza_idioma"}`
-- `POST /sintetizar` — JSON `{"texto": "..."}` → WAV (24kHz)
+- `POST /sintetizar` — JSON `{"texto": "..."}` → PCM de 16 bits a 24 kHz, crudo y en streaming (sin encabezado WAV)
 
 `app/core/config.py` de la app principal apunta acá vía `VOZ_ASR_TTS_URL`
 (default `http://localhost:8001`).
+
+Para probar una llamada sin Twilio, el panel tiene un **Teléfono de prueba**
+(`/telefono`): usa el micrófono del navegador y pasa por el mismo código que
+una llamada real. Necesita este servicio, la API y Ollama corriendo.

@@ -968,14 +968,17 @@ el estado del reclamo.
 
 Todo lo que falló con la v3 en las conversaciones reales ya tiene su red en el
 código; la v4 es para que el modelo lo haga bien solo y la red quede de
-respaldo. Suma 237 conversaciones (213 en train y 24 en validación: quedan
-2996 y 397):
+respaldo. Suma 277 conversaciones (249 en train y 28 en validación: quedan
+3032 y 401):
 
 - 60 reclamos en el turno después del pedido de datos, como lo ve hoy el
   modelo: la identidad ya la registró el código, el reclamo está en el
   historial. Una sola llamada, con lo que contó el vecino ("se cayó una moto"
   entra; una calle que no dijo, no). En el 30% no dio la dirección, y se le
   pide.
+- 40 turnos en el mismo punto: con el día ya dicho se reserva, sin el día se
+  pregunta. Por voz, la v3 registró un reclamo con el pedido del turno como
+  descripción.
 - 40 preguntas por su caso desde un contacto sin identificar: se le piden los
   datos para buscarlo, con el mismo texto que arma el código.
 - 60 preguntas de seguimiento ya identificado ("¿y para cuándo lo arreglan?"),
@@ -990,8 +993,8 @@ respaldo. Suma 237 conversaciones (213 en train y 24 en validación: quedan
 Los textos que ya arma el código (avisos, pedidos de datos, "no tengo ese
 dato") se importan de `app/`, y los documentos de
 `scripts/documentos_de_ejemplo.py`, separados de `seed_conocimiento.py` para no
-importar la base en Colab. La conversación más larga mide 2433 tokens (la v3,
-2439), dentro de los 2560 del entrenamiento. El conjunto de prueba no cambia.
+importar la base en Colab. La conversación más larga mide 2439 tokens, igual
+que en la v3, dentro de los 2560 del entrenamiento. El conjunto de prueba no cambia.
 
 Quedó a la vista un problema del dataset original: algunos ejemplos manuales
 de consulta contestan plazos sin información del organismo en el prompt, y dos

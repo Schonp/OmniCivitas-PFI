@@ -7,6 +7,7 @@ import { DetalleCaso } from "./paginas/DetalleCaso";
 import { Login } from "./paginas/Login";
 import { Panel } from "./paginas/Panel";
 import { ReclamosComunes } from "./paginas/ReclamosComunes";
+import { TelefonoWeb } from "./paginas/TelefonoWeb";
 import { Turnos } from "./paginas/Turnos";
 
 function RutaProtegida({ children }: { children: React.ReactNode }) {
@@ -37,6 +38,7 @@ export function App() {
         <Route path="/turnos" element={<Turnos />} />
         <Route path="/conocimiento" element={<Conocimiento />} />
         <Route path="/reclamos-comunes" element={<ReclamosComunes />} />
+        <Route path="/telefono" element={<TelefonoWeb />} />
       </Route>
       <Route path="*" element={<Navigate to="/casos" replace />} />
     </Routes>

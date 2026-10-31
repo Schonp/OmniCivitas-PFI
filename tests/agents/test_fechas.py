@@ -28,6 +28,10 @@ AHORA = datetime(2026, 10, 28, 15, 0, tzinfo=ZONA_HORARIA)
         ("a las 2 del 3 de noviembre", "2026-11-03 14:00"),
         # Una fecha que ya pasó este año es del año que viene.
         ("el 2/3 a las 10", "2027-03-02 10:00"),
+        # Por voz, la hora llega en palabras.
+        ("el jueves a las diez.", "2026-10-29 10:00"),
+        ("el viernes a la una y media", "2026-10-30 13:30"),
+        ("mañana a las once y cuarto", "2026-10-29 11:15"),
     ],
 )
 def test_lee_dia_y_hora(mensaje, esperado):

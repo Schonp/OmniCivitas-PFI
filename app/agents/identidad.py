@@ -9,8 +9,11 @@ nombre viene al lado: se puede leer con reglas, sin depender de una inferencia.
 
 import re
 
-# Un DNI argentino, con o sin puntos: 7 u 8 dígitos ("30.111.291", "30111291").
-DNI = re.compile(r"\b\d{1,2}\.?\d{3}\.?\d{3}\b")
+# Un DNI argentino: 7 u 8 dígitos, juntos o separados en grupos ("30.111.291",
+# "30111291"). Por voz, el reconocimiento lo transcribe también con guiones o
+# espacios ("30-885-211"): pasó en la primera llamada de prueba, y sin esto el
+# DNI dictado no se registraba y el agente lo volvía a pedir.
+DNI = re.compile(r"\b\d{1,2}[.\- ]?\d{3}[.\- ]?\d{3}\b")
 
 # La presentación no distingue mayúsculas; el nombre sí: arranca con mayúscula,
 # lo que evita llevarse la palabra siguiente ("soy Juan Pérez, DNI ...").
@@ -36,7 +39,7 @@ def extraer_identidad(texto: str) -> tuple[str | None, str] | None:
     coincidencia = DNI.search(texto or "")
     if coincidencia is None:
         return None
-    documento = coincidencia.group(0).replace(".", "")
+    documento = re.sub(r"\D", "", coincidencia.group(0))
 
     presentacion = _PRESENTACION.search(texto)
     if presentacion:

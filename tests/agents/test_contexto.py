@@ -78,6 +78,39 @@ async def test_contexto_recupera_el_caso_derivado_a_un_operador(db_session, ciud
     assert resultado["caso_id"] == str(caso.id)
 
 
+async def test_el_dni_sigue_el_pedido_del_caso_abierto(db_session):
+    """Pasó por voz: después de pedir un turno, el mensaje con el DNI salió
+    "reclamo" y el turno se registró como reclamo. La respuesta al pedido de
+    datos lleva la intención del pedido que la motivó."""
+    from app.db.crud.ciudadanos import documento_provisorio
+    from app.db.models import Ciudadano
+
+    provisorio = Ciudadano(
+        nombre="Laura", documento=documento_provisorio("+5491100008899"), telefono="+5491100008899"
+    )
+    db_session.add(provisorio)
+    await db_session.flush()
+    caso = Caso(
+        ciudadano_id=provisorio.id,
+        tipo=TipoCaso.reserva,
+        canal_origen=Canal.voz,
+        canal_actual=Canal.voz,
+    )
+    db_session.add(caso)
+    await db_session.commit()
+    estado = {
+        "mensaje": "Me llamo Laura Prueba y mi documento es 30-885-311.",
+        "canal": "voz",
+        "identificador": "+5491100008899",
+        "intencion": "reclamo",
+    }
+
+    resultado = await nodo_contexto(estado, db_session)
+
+    assert resultado["caso_id"] == str(caso.id)
+    assert resultado["intencion"] == "reserva"
+
+
 async def test_contexto_trae_las_pautas_generales(db_session, ciudadano):
     """Las pautas llegan aunque el mensaje no las mencione."""
     await crear_documento(

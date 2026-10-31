@@ -68,6 +68,7 @@ export function Layout() {
           <EnlaceNav a="/turnos">Turnos</EnlaceNav>
           <EnlaceNav a="/conocimiento">Base de conocimiento</EnlaceNav>
           {esSupervisor && <EnlaceNav a="/reclamos-comunes">Reclamos en común</EnlaceNav>}
+          <EnlaceNav a="/telefono">Teléfono de prueba</EnlaceNav>
         </nav>
       </header>
 

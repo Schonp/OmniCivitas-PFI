@@ -15,6 +15,7 @@ from app.api import (
     health,
     metricas,
     reclamos,
+    telefono_web,
     turnos,
     usuarios,
     webhooks,
@@ -68,3 +69,4 @@ app.include_router(turnos.router)
 app.include_router(conocimiento.router)
 app.include_router(reclamos.router)
 app.include_router(webhooks.router)
+app.include_router(telefono_web.router)

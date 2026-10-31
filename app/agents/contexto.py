@@ -116,7 +116,8 @@ async def nodo_contexto(state: AgentState, db: AsyncSession) -> dict:
     # más tarde es una conversación nueva. Sin esa distinción, un caso derivado
     # que nadie tomó se queda con todos los saludos que vengan después y el
     # ciudadano no vuelve a hablar con el agente nunca más.
-    if state.get("intencion") == "saludo":
+    intencion = state.get("intencion")
+    if intencion == "saludo":
         pertenece_al_hilo = activo is not None and contacto_reciente(
             await ultimo_mensaje_al_ciudadano(db, activo.id)
         )
@@ -125,6 +126,12 @@ async def nodo_contexto(state: AgentState, db: AsyncSession) -> dict:
         # está en el caso abierto. Si el intake lo toma como tema nuevo, se
         # abre otro caso con el nombre y el DNI como descripción.
         pertenece_al_hilo = True
+        if activo is not None:
+            # Y la intención es la de ese pedido, no la que el intake le
+            # adivine a un nombre y un número. Pasó por voz: después de "quiero
+            # un turno para la licencia", el DNI salió "reclamo", el agente
+            # tuvo a mano `crear_reclamo` y registró el turno como reclamo.
+            intencion = activo.tipo.value
     else:
         # Un tema nuevo no se pega al caso abierto ni hereda su historial: el
         # ciudadano puede tener un reclamo en curso y preguntar por otra cosa.
@@ -149,11 +156,10 @@ async def nodo_contexto(state: AgentState, db: AsyncSession) -> dict:
     # Lo último que se dijo en el caso: el mensaje anterior del ciudadano y la
     # respuesta que recibió, que es donde está el tema si ahora no lo nombra.
     conversacion = " ".join(e["contenido"] or "" for e in historial[-ULTIMOS_PARA_BUSCAR:])
-    conocimiento = await buscar_conocimiento(
-        db, state.get("intencion"), state["mensaje"], conversacion
-    )
+    conocimiento = await buscar_conocimiento(db, intencion, state["mensaje"], conversacion)
 
     return {
+        "intencion": intencion,
         "ciudadano_id": str(ciudadano.id),
         # Si arrastra el documento provisorio del alta, el ejecutor le va a
         # pedir que se identifique antes de gestionar nada.

@@ -37,11 +37,26 @@ _HORAS = [
 ]
 
 
+# Por voz la hora llega en palabras: el reconocimiento transcribe "a las diez",
+# no "a las 10". Pasó en la primera llamada del teléfono web: "el jueves a las
+# diez" no se leía, y la fecha quedaba en manos del modelo, que reservó el lunes.
+HORAS_EN_PALABRAS = {
+    "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7,
+    "ocho": 8, "nueve": 9, "diez": 10, "once": 11, "doce": 12, "trece": 13,
+    "catorce": 14, "quince": 15, "dieciseis": 16, "diecisiete": 17, "dieciocho": 18,
+    "diecinueve": 19, "veinte": 20,
+}
+_HORA_EN_PALABRAS = re.compile(r"\b(a\s+las?)\s+(" + "|".join(HORAS_EN_PALABRAS) + r")\b")
+
+
 def _normalizado(texto: str) -> str:
     return texto.lower().translate(str.maketrans("áéíóúüñ", "aeiouun"))
 
 
 def _hora_dicha(texto: str) -> time | None:
+    texto = _HORA_EN_PALABRAS.sub(
+        lambda m: f"{m.group(1)} {HORAS_EN_PALABRAS[m.group(2)]}", texto
+    )
     for patron in _HORAS:
         coincidencia = patron.search(texto)
         if coincidencia is None:

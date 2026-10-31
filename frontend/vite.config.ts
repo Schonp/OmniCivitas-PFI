@@ -10,6 +10,8 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,
+        // El teléfono web abre un WebSocket contra la API.
+        ws: true,
       },
     },
   },

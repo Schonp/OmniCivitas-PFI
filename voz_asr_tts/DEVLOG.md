@@ -175,3 +175,64 @@ Twilio real y un túnel (ngrok) hacia este servidor.
       `media` entrantes mientras envía la respuesta.
 - [ ] Migración Postgres para sacar el valor huérfano `sms` del enum `canal`
       (no bloquea nada de voz, pendiente de antes).
+
+---
+
+## 2026-10-31 — Teléfono web y la primera conversación de voz de punta a punta
+
+El canal nunca se había probado con audio real: hace falta una línea de Twilio
+y un túnel. Para probarlo y para grabar la demo se agregó un **teléfono web**
+en el panel (`/telefono`, "Teléfono de prueba"): el navegador captura el
+micrófono, lo baja a mu-law de 8 kHz en pedazos de 20 ms y habla el mismo
+protocolo que Twilio Media Streams contra `/api/telefono-web/stream`. Del lado
+del servidor la llamada pasa por exactamente el mismo código que una de Twilio
+(`atender_stream` en `app/api/webhooks.py`); lo único distinto es que pide un
+usuario del panel (el token va en el primer mensaje, no en la URL, para que no
+quede en los logs) y que el teléfono del ciudadano lo fija el servidor, no un
+parámetro que cualquiera podría mandar. La página recibe además subtítulos (lo
+que entendió el reconocimiento y lo que contestó el agente) y el estado del
+turno.
+
+El códec mu-law del navegador copia el algoritmo de `audioop` (en 14 bits, con
+el corrimiento antes del signo): comparado contra Python en los 65.536 valores
+de entrada y los 256 de salida, coincide bit a bit. Mientras suena el agente
+la página manda silencio: sin cancelación de eco confiable en el navegador, el
+detector de turno tomaría la voz del agente por los parlantes como si hablara
+el ciudadano.
+
+Las llamadas de prueba (audio sintetizado con Kokoro, enviado a velocidad
+real) destaparon cuatro problemas, tres de ellos también de Twilio:
+
+- **La llamada se cortaba en un turno largo.** El turno se procesaba dentro del
+  bucle que lee el WebSocket, y el audio sigue llegando mientras tanto (50
+  pedazos por segundo, también en silencio). El servidor encola 32 mensajes y,
+  lleno, deja de leer el socket, así que no le llegan las respuestas a sus
+  pings: un turno de más de unos 20 segundos (el primero, con el modelo
+  cargándose, tardó 22) cortaba la llamada. Ahora el turno corre en su propia
+  tarea, el bucle sigue leyendo, y el audio que llega mientras se procesa se
+  descarta (todavía no hay barge-in).
+- **El DNI dictado no se reconocía.** Whisper lo transcribe "30-885-211", con
+  guiones; el código solo leía puntos. Ahora acepta guiones y espacios.
+- **"El jueves a las diez" no se leía.** Por voz la hora llega en palabras; la
+  fecha quedaba en manos del modelo, que reservó el lunes. Ahora se leen las
+  horas en palabras ("a las diez", "a la una y media").
+- **El DNI registraba un reclamo.** Después de pedir un turno, el mensaje con
+  el DNI lo clasifica el intake por sí solo y salió "reclamo"; el agente
+  registró el pedido del turno como reclamo. Ahora la respuesta al pedido de
+  datos lleva la intención del caso abierto, y un `crear_reclamo` en una
+  conversación por un turno se trata como reserva (si no dijo el día, se le
+  pregunta). Además el dataset v4 suma turnos después del pedido de datos.
+
+Repetida, la llamada sale entera: saludo, pedido del turno, pedido de datos,
+DNI dictado, la grilla de la agenda, "el jueves a las diez" y, como ese horario
+estaba ocupado, los tres libres más cercanos.
+
+### Qué queda
+
+- [ ] El primer turno lee el aviso de IA y el de datos personales completos:
+      unos 30 segundos de audio. En voz convendría una versión corta, o
+      decirlo en el saludo (que hoy ya avisa que es una IA).
+- [ ] Probar el teléfono web con un micrófono real (el navegador integrado
+      de las pruebas no tiene micrófono: se probó con un oscilador).
+- [ ] Barge-in, VAD real, Whisper en la GPU y un aviso de "un momento" mientras
+      piensa (ver la lista de mejoras del canal).

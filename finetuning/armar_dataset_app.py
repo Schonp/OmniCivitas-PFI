@@ -715,6 +715,43 @@ def reclamos_tras_identificarse(n: int) -> list[dict]:
     return salida
 
 
+def reservas_tras_identificarse(n: int) -> list[dict]:
+    """Lo mismo para un turno. Pasó por voz con la v3: después del DNI registró
+    un reclamo con el pedido del turno como descripción. Si el día ya estaba
+    dicho, se reserva; si no, se pregunta (con los reclamos de arriba como única
+    referencia, el modelo podía aprender que después del DNI va un reclamo)."""
+    salida = []
+    for _ in range(n):
+        canal = random.choice([Canal.whatsapp, Canal.email, Canal.voz, Canal.voz])
+        hoy = _hoy_al_azar()
+        turno = random.choice(TURNOS)
+        nombre = random.choice(NOMBRES)
+        dicho, _ = _dni()
+        pedido = AIMessage(content=pedido_de_identificacion("crear_reserva", canal))
+        datos = HumanMessage(content=random.choice(RESPUESTAS_CON_DNI).format(n=nombre, d=dicho))
+        if random.random() < 0.5:
+            fecha, iso = _fecha_futura(hoy)
+            turnos = [
+                HumanMessage(content=f"Quiero un turno de {turno} para {fecha}"),
+                pedido,
+                datos,
+                AIMessage(content="", tool_calls=[_llamada("crear_reserva", {"turno": turno, "fecha_hora": iso})]),
+            ]
+        else:
+            turnos = [
+                HumanMessage(content=random.choice([
+                    "Quiero sacar un turno de {t}", "Hola, necesito un turno para {t}",
+                ]).format(t=turno)),
+                pedido,
+                datos,
+                AIMessage(content=random.choice(PIDE_FECHA).format(turno=turno)),
+            ]
+        salida.append(conversacion_ejecutor(
+            turnos, intencion="reserva", canal=canal, hoy=hoy, conocimiento=CONOCIMIENTO_TURNOS,
+        ))
+    return salida
+
+
 PREGUNTAS_POR_SU_CASO = [
     "¿Cómo va el reclamo del pozo?", "Hola, les escribo por correo. ¿Cómo va mi reclamo?",
     "¿Qué pasó con el reclamo de la luz que hice?", "¿En qué quedó mi trámite?",
@@ -940,6 +977,7 @@ def _nuevos() -> list[dict]:
         + trato()
         + intake_emergencias()
         + reclamos_tras_identificarse(60)
+        + reservas_tras_identificarse(40)
         + consultas_sin_identificar(40)
         + seguimientos(60)
         + intake_consultas_de_estado()

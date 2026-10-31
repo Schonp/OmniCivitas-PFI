@@ -689,6 +689,47 @@ async def test_a_quien_ya_esta_identificado_no_se_le_vuelven_a_pedir_los_datos(
     assert resultado["respuesta"] == mod.NO_TENGO_ESE_DATO
 
 
+async def test_un_reclamo_en_un_pedido_de_turno_va_como_turno(db_session, ciudadano, mocker):
+    """Pasó por voz: pidió un turno, dio su DNI y el modelo registró un reclamo
+    con el pedido del turno como descripción. Sin día dicho, se le pregunta."""
+    from langchain_core.messages import AIMessage as _AI
+
+    from app.agents import ejecutor as mod
+    from app.agents.confirmacion import pedido_de_dia_y_hora
+    from app.db.models import Canal as _Canal
+
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        return_value=_AI(
+            content="",
+            tool_calls=[{
+                "name": "crear_reclamo",
+                "args": {"descripcion": "Quiero sacar un turno para la licencia", "categoria": "tramite"},
+                "id": "c1",
+            }],
+        )
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+    estado = {
+        "mensaje": "Me llamo Juan Pérez y mi documento es 30-885-411.",
+        "canal": "voz",
+        "identificador": ciudadano.telefono,
+        "ciudadano_id": str(ciudadano.id),
+        "identificado": True,
+        "caso_id": None,
+        "historial": [
+            {"actor": "ciudadano", "contenido": "Hola, quiero sacar un turno para la licencia de conducir."},
+            {"actor": "agente_ia", "contenido": "¿Qué día y a qué hora le queda bien?"},
+        ],
+        "intencion": "reserva",
+    }
+
+    resultado = await mod.nodo_ejecutor(estado, db_session)
+
+    assert "crear_reclamo" not in (resultado.get("resultado_ejecucion") or {})
+    assert resultado["respuesta"].endswith(pedido_de_dia_y_hora(None, _Canal.voz))
+
+
 def test_se_quita_un_numero_de_caso_que_no_es_del_ciudadano():
     """Pasó con el modelo real: "Número de caso: REC-20194FB3" con el caso real
     REC-20194FB2."""

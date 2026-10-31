@@ -431,6 +431,20 @@ def agenda_nombrada(agendas: list[Turno], dichos_del_ciudadano: list[str]) -> Tu
     return nombradas[0] if len(nombradas) == 1 else None
 
 
+_HABLA_DE_TURNO = re.compile(r"\bturnos?\b|\breserv\w*|\bcitas?\b", re.IGNORECASE)
+
+
+async def _es_pedido_de_turno(state: AgentState, db: AsyncSession, dichos: list[str]) -> bool:
+    """La conversación es por un turno: la intención es reservar y el ciudadano
+    habló de un turno o nombró una agenda. Con las dos cosas, un reclamo es un
+    error del modelo y no un reclamo que el intake clasificó mal."""
+    if state.get("intencion") != "reserva":
+        return False
+    if any(_HABLA_DE_TURNO.search(dicho) for dicho in dichos):
+        return True
+    return agenda_nombrada(await listar_agendas(db), dichos) is not None
+
+
 def dijo_un_dia(dichos_del_ciudadano: list[str]) -> bool:
     """Si el ciudadano nombró un día ("el jueves", "mañana", "5/11", "5 de
     noviembre"). Sin eso, la fecha de la reserva la inventó el modelo."""
@@ -507,6 +521,12 @@ def dni_dicho(documento: str, dichos_del_ciudadano: list[str]) -> bool:
         numero.replace(".", "")
         for dicho in dichos_del_ciudadano
         for numero in re.findall(r"\d[\d.]*", dicho)
+    }
+    # Y los DNI con guiones o espacios, como los transcribe el canal de voz.
+    numeros |= {
+        re.sub(r"\D", "", coincidencia.group(0))
+        for dicho in dichos_del_ciudadano
+        for coincidencia in DNI.finditer(dicho)
     }
     return digitos in numeros
 
@@ -820,6 +840,18 @@ async def _resolver(
         )
         gestionadas: set[str] = set()
         for tool_call in llamadas:
+            if tool_call["name"] == "crear_reclamo" and await _es_pedido_de_turno(state, db, dichos):
+                # Pasó por voz con la v3: pidió un turno, dio su DNI y el
+                # modelo registró un reclamo con el pedido del turno como
+                # descripción. Se trata como lo que es; si todavía no dijo el
+                # día, el control de `crear_reserva` se lo pregunta.
+                logger.warning("ejecutor: crear_reclamo en un pedido de turno; va como reserva")
+                agenda = agenda_nombrada(await listar_agendas(db), dichos)
+                tool_call["name"] = "crear_reserva"
+                tool_call["args"] = {
+                    "turno": agenda.nombre if agenda else "",
+                    "fecha_hora": ultima_fecha_hora_dicha(dichos) or "",
+                }
             if tool_call["name"] in GESTIONES and tool_call["name"] in gestionadas:
                 # Pasó con la v3: dos `crear_reclamo` en la misma respuesta, con
                 # dos redacciones del mismo pozo. Caen en el mismo caso de la
