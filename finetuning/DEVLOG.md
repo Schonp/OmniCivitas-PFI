@@ -1005,9 +1005,9 @@ contradicen los documentos (alumbrado en 10 días hábiles contra 5; atención d
 
 - [ ] El mensaje con una clave igual queda guardado en las interacciones del
       caso: falta enmascararla antes de persistir.
-- [ ] Entrenar la v4 en Colab, servirla y medirla contra la v3 por el camino de
-      la app, y repetir las conversaciones reales. (La primera corrida
-      retrocedió: ver la entrada del 2026-11-01.)
+- [x] Entrenar la v4 en Colab, servirla y medirla contra la v3 por el camino de
+      la app, y repetir las conversaciones reales (la primera corrida
+      retrocedió; la reentrenada está en servicio, ver 2026-11-01).
 - [ ] Decidir qué hacer con los ejemplos manuales que contestan plazos sin
       información del organismo (alinearlos con los documentos o sacarlos).
 
@@ -1041,3 +1041,39 @@ Arreglo, sin cambiar las conversaciones: esas filas llevan
 les enmascara todo lo anterior a la última respuesta (90 en train, 10 en
 validación). Imprime una fila de control con lo que se aprende. Hay que volver
 a entrenar; la v4 entrenada así no se carga en Ollama.
+
+### La v4 reentrenada
+
+Con el arreglo, en Colab: 91,0% exacto (61/67) y 98,5% sin texto libre
+(66/67). Ya no pide los datos a quien está identificado. Queda la plaza San
+Martín (pide la dirección) y cinco diferencias de redacción: saca "hace N días"
+de tres descripciones y en una consulta inventa la referencia ("reclamo por
+desagüe tapado" para "el reclamo que hice la semana pasada").
+
+En Ollama, `omnicivitas-qwen` pasa a ser la v4 y la v3 queda como
+`omnicivitas-qwen-v3`. Por el camino de la app, misma corrida (RTX 3050):
+
+| Modelo | Intención | Falsos positivos | Tool calling exacto | Sin texto libre | s/mensaje |
+|---|---|---|---|---|---|
+| v3 | 100% | 0 | 77,6% (52/67) | 98,5% (66/67) | 3,3 |
+| **v4** | **100%** | **0** | **77,6% (52/67)** | **100% (67/67)** | **3,3** |
+
+La única diferencia estructural es el contenedor de reciclaje roto, que la v4
+registra como `infraestructura`. La plaza San Martín sale bien con los dos por
+este camino.
+
+Repetidas las conversaciones reales:
+
+- El turno de licencia completo (pedir, datos, día, cambiar, cancelar): después
+  del DNI pregunta el día en vez de registrar un reclamo.
+- La continuidad entre canales sale entera: pide los datos, registra el pozo
+  con lo que dijo la vecina ("se cayó una moto", sin calles inventadas), por
+  correo pide los datos para buscar el caso, suma el correo, da el estado y
+  contesta el plazo del bacheo con el documento.
+- La amenaza de la pareja: el modelo mismo nombra el 911 y el 144.
+- El cable caído y el gas llegan con el aviso adelante, pero lo pone el código:
+  el modelo intentó registrar la identidad con un DNI que nadie dio, el control
+  lo frenó y al reintentar pidió los datos.
+
+Sigue haciendo falta la red del código para los avisos de emergencia y para los
+DNI inventados en el primer mensaje.
