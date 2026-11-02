@@ -153,6 +153,7 @@ def conversacion_ejecutor(
     origen_menu: str | None = None,
     hoy: datetime = HOY_DEL_DATASET,
     pautas=_AL_AZAR,
+    solo_ultima_respuesta: bool = False,
 ) -> dict:
     canal = canal or _canal_ejecutor()
     if pautas is _AL_AZAR:
@@ -166,10 +167,13 @@ def conversacion_ejecutor(
         hoy=hoy,
     )
     tools = _tools(intencion, identificado)
-    return {
+    conversacion = {
         "tipo": "ejecutor",
         "messages": _render([SystemMessage(content=sistema), *turnos], tools),
     }
+    if solo_ultima_respuesta:
+        conversacion["solo_ultima_respuesta"] = True
+    return conversacion
 
 
 def conversacion_intake(
@@ -683,7 +687,11 @@ def reclamos_tras_identificarse(n: int) -> list[dict]:
     """El turno después del pedido de datos, tal como lo ve el modelo hoy: el
     código ya registró la identidad (el prompt dice identificado) y el reclamo
     está en el historial. Una sola llamada, con lo que dijo el ciudadano; si no
-    dio la dirección, se le pide en vez de inventarla."""
+    dio la dirección, se le pide en vez de inventarla.
+
+    Se aprende solo la última respuesta: el pedido de datos del historial se
+    dijo cuando el prompt todavía decía no identificado. Entrenado entero, con
+    la v4 el modelo le pedía nombre y DNI a quien ya estaba identificado."""
     salida = []
     for _ in range(n):
         canal = random.choice([Canal.whatsapp, Canal.whatsapp, Canal.email, Canal.voz])
@@ -711,7 +719,9 @@ def reclamos_tras_identificarse(n: int) -> list[dict]:
                 datos,
                 AIMessage(content="", tool_calls=[reclamo]),
             ]
-        salida.append(conversacion_ejecutor(turnos, intencion="reclamo", canal=canal))
+        salida.append(conversacion_ejecutor(
+            turnos, intencion="reclamo", canal=canal, solo_ultima_respuesta=True,
+        ))
     return salida
 
 
@@ -748,6 +758,7 @@ def reservas_tras_identificarse(n: int) -> list[dict]:
             ]
         salida.append(conversacion_ejecutor(
             turnos, intencion="reserva", canal=canal, hoy=hoy, conocimiento=CONOCIMIENTO_TURNOS,
+            solo_ultima_respuesta=True,
         ))
     return salida
 

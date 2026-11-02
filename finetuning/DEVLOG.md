@@ -1006,6 +1006,38 @@ contradicen los documentos (alumbrado en 10 días hábiles contra 5; atención d
 - [ ] El mensaje con una clave igual queda guardado en las interacciones del
       caso: falta enmascararla antes de persistir.
 - [ ] Entrenar la v4 en Colab, servirla y medirla contra la v3 por el camino de
-      la app, y repetir las conversaciones reales.
+      la app, y repetir las conversaciones reales. (La primera corrida
+      retrocedió: ver la entrada del 2026-11-01.)
 - [ ] Decidir qué hacer con los ejemplos manuales que contestan plazos sin
       información del organismo (alinearlos con los documentos o sacarlos).
+
+## 2026-11-01 — Resultados de la cuarta versión: un retroceso con causa en el entrenamiento
+
+En Colab, sobre las 67 de prueba, la v4 dio 89,6% exacto (60/67) y 95,5% sin
+campos de texto libre (64/67). La v3 había dado 94,0% y 100%. Los tres fallos
+estructurales son respuestas sin llamada:
+
+- "Hace tres días que no pasa el camión de la basura por mi cuadra, Belgrano al
+  500" y "Hola, hay un cable de luz caído en Av. Warnes 797": contesta el pedido
+  de nombre y DNI, aunque el prompt de prueba dice que el ciudadano ya está
+  identificado.
+- "La plaza San Martín está llena de pozos": pide la dirección exacta. Es un
+  caso de borde (la plaza ya ubica el problema) que la v3 resolvía.
+
+Los otros cuatro son de redacción: saca "hace 5 días" de la descripción y deja
+la `referencia` vacía en dos consultas de estado.
+
+Los dos primeros tienen una causa concreta. `reclamos_tras_identificarse` y
+`reservas_tras_identificarse` (100 conversaciones) muestran el turno que sigue
+al DNI, con el prompt que ve el modelo en ese momento, que ya dice
+identificado. El pedido de datos queda en el historial como turno del
+asistente, y `train_on_responses_only` aprende todos los turnos del asistente,
+no solo el último. El modelo aprendió entonces a pedir nombre y DNI con el
+prompt de identificado: lo contrario de lo que se buscaba, y la misma falla que
+la v3 mostró en la conversación real por correo.
+
+Arreglo, sin cambiar las conversaciones: esas filas llevan
+`solo_ultima_respuesta`, y el notebook, después de `train_on_responses_only`,
+les enmascara todo lo anterior a la última respuesta (90 en train, 10 en
+validación). Imprime una fila de control con lo que se aprende. Hay que volver
+a entrenar; la v4 entrenada así no se carga en Ollama.
