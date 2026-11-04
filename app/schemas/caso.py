@@ -65,6 +65,17 @@ class RespuestaOperadorCreate(BaseModel):
     )
 
 
+class AvisoCasoOut(BaseModel):
+    caso: "CasoOut"
+    motivo: Literal["derivado", "asignado"]
+    momento: datetime
+
+
+class AvisosOut(BaseModel):
+    ahora: datetime = Field(description="Hora del servidor: el `desde` de la próxima consulta.")
+    avisos: list[AvisoCasoOut]
+
+
 class ConteoCasosOut(BaseModel):
     todos: int
     por_estado: dict[str, int]
@@ -92,3 +103,6 @@ class CasoOut(BaseModel):
     )
     created_at: datetime
     updated_at: datetime
+
+
+AvisoCasoOut.model_rebuild()

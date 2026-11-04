@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Gauge,
   MapPin,
   Settings2,
@@ -82,6 +83,18 @@ const lunesDe = (fecha: string) => sumarDias(fecha, -diaDeSemana(fecha));
 export function etiquetaDia(fecha: string): string {
   const d = aFecha(fecha);
   return `${DIAS_CORTOS[diaDeSemana(fecha)]} ${d.getUTCDate()}/${d.getUTCMonth() + 1}`;
+}
+
+const diaLargo = new Intl.DateTimeFormat("es-AR", {
+  timeZone: "UTC",
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+});
+
+function etiquetaDiaLarga(fecha: string): string {
+  const texto = diaLargo.format(aFecha(fecha));
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
 }
 
 function etiquetaSemana(lunes: string): string {
@@ -156,6 +169,7 @@ export function Turnos() {
   const esSupervisor = usuario?.rol === "supervisor";
   const hoy = enArgentina(new Date()).fecha;
   const [configurando, setConfigurando] = useState(false);
+  const [vista, setVista] = useState<"semana" | "dia">("semana");
   const [aviso, setAviso] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [lunes, setLunes] = useState(() => lunesDe(hoy));
@@ -257,35 +271,62 @@ export function Turnos() {
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Turnos</h2>
           <p className="text-sm text-slate-600">
-            Agenda semanal de cada trámite: horarios libres, ocupados y la asistencia de cada
-            vecino. Se actualiza sola cada 15 segundos.
+            {vista === "dia"
+              ? "Los turnos del día de todas las agendas, en orden de hora, para llamar a cada vecino y marcar si vino."
+              : "Agenda semanal de cada trámite: horarios libres, ocupados y la asistencia de cada vecino."}{" "}
+            Se actualiza sola cada 15 segundos.
           </p>
         </div>
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setLunes(sumarDias(lunes, -7))}
-            className="rounded-md border border-slate-300 bg-white p-2 text-slate-700 hover:border-institucional-500"
-            aria-label="Semana anterior"
+        <div className="flex flex-wrap items-center gap-1.5">
+          <div
+            role="group"
+            aria-label="Vista"
+            className="mr-2 inline-flex rounded-md border border-slate-300 bg-white p-0.5"
           >
-            <ChevronLeft size={16} aria-hidden />
-          </button>
-          <button
-            type="button"
-            onClick={() => setLunes(lunesDe(hoy))}
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-institucional-500"
-          >
-            Hoy
-          </button>
-          <button
-            type="button"
-            onClick={() => setLunes(sumarDias(lunes, 7))}
-            className="rounded-md border border-slate-300 bg-white p-2 text-slate-700 hover:border-institucional-500"
-            aria-label="Semana siguiente"
-          >
-            <ChevronRight size={16} aria-hidden />
-          </button>
-          <span className="ml-2 text-sm font-medium text-slate-700">Semana del {etiquetaSemana(lunes)}</span>
+            {(["dia", "semana"] as const).map((opcion) => (
+              <button
+                key={opcion}
+                type="button"
+                aria-pressed={vista === opcion}
+                onClick={() => setVista(opcion)}
+                className={`rounded px-3 py-1 text-sm font-medium transition ${
+                  vista === opcion
+                    ? "bg-institucional-600 text-white"
+                    : "text-slate-700 hover:bg-slate-100"
+                }`}
+              >
+                {opcion === "dia" ? "Día" : "Semana"}
+              </button>
+            ))}
+          </div>
+          {vista === "semana" && (
+            <>
+              <button
+                type="button"
+                onClick={() => setLunes(sumarDias(lunes, -7))}
+                className="rounded-md border border-slate-300 bg-white p-2 text-slate-700 hover:border-institucional-500"
+                aria-label="Semana anterior"
+              >
+                <ChevronLeft size={16} aria-hidden />
+              </button>
+              <button
+                type="button"
+                onClick={() => setLunes(lunesDe(hoy))}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-institucional-500"
+              >
+                Hoy
+              </button>
+              <button
+                type="button"
+                onClick={() => setLunes(sumarDias(lunes, 7))}
+                className="rounded-md border border-slate-300 bg-white p-2 text-slate-700 hover:border-institucional-500"
+                aria-label="Semana siguiente"
+              >
+                <ChevronRight size={16} aria-hidden />
+              </button>
+              <span className="ml-2 text-sm font-medium text-slate-700">Semana del {etiquetaSemana(lunes)}</span>
+            </>
+          )}
           {esSupervisor && agenda && (
             <>
               <button
@@ -342,7 +383,9 @@ export function Turnos() {
         </p>
       )}
 
-      {agenda && (
+      {vista === "dia" && turnos.length > 0 && <VistaDelDia hoy={hoy} />}
+
+      {vista === "semana" && agenda && (
         <>
           <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Indicador icono={CalendarClock} etiqueta="Turnos hoy" valor={String(indicadores.hoy)} detalle="Todas las agendas" />
@@ -956,5 +999,227 @@ function DetalleHorario({
         ))}
       </ul>
     </aside>
+  );
+}
+
+/**
+ * Los turnos de un día de todas las agendas juntas, en orden de hora: lo que
+ * necesita el mostrador para llamar a cada vecino y marcar si vino.
+ */
+function VistaDelDia({ hoy }: { hoy: string }) {
+  const [fecha, setFecha] = useState(hoy);
+  const [turnos, setTurnos] = useState<Turno[]>([]);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [verCancelados, setVerCancelados] = useState(false);
+  const [marcando, setMarcando] = useState<string | null>(null);
+  const [ahora, setAhora] = useState(() => enArgentina(new Date()));
+
+  const cargar = useCallback(async () => {
+    try {
+      setTurnos(await listarTurnos(fecha, 1));
+      setAhora(enArgentina(new Date()));
+      setError(null);
+    } catch (excepcion) {
+      setError(excepcion instanceof Error ? excepcion.message : "No se pudieron cargar los turnos");
+    } finally {
+      setCargando(false);
+    }
+  }, [fecha]);
+
+  useEffect(() => {
+    void cargar();
+    const temporizador = setInterval(() => void cargar(), REFRESCO_MS);
+    return () => clearInterval(temporizador);
+  }, [cargar]);
+
+  const filas = useMemo(
+    () =>
+      turnos
+        .flatMap((agenda) => agenda.reservas.map((reserva) => ({ reserva, agenda })))
+        .sort(
+          (a, b) => new Date(a.reserva.fecha_hora).getTime() - new Date(b.reserva.fecha_hora).getTime(),
+        ),
+    [turnos],
+  );
+  const vigentes = filas.filter((f) => f.reserva.estado !== "cancelada");
+  const cancelados = filas.length - vigentes.length;
+  const visibles = verCancelados ? filas : vigentes;
+  const cuenta = (estado: EstadoReserva) => vigentes.filter((f) => f.reserva.estado === estado).length;
+  const bloqueos = turnos.flatMap((agenda) =>
+    agenda.bloqueos.filter((b) => b.fecha === fecha).map((b) => ({ agenda, motivo: b.motivo })),
+  );
+
+  // El próximo a llamar: el primer turno confirmado de hoy que todavía no pasó.
+  const ahoraClave = `${ahora.fecha} ${ahora.hora}`;
+  const proximo =
+    fecha === hoy
+      ? vigentes.find((f) => {
+          const { fecha: dia, hora } = enArgentina(new Date(f.reserva.fecha_hora));
+          return f.reserva.estado === "confirmada" && `${dia} ${hora}` >= ahoraClave;
+        })?.reserva.id
+      : undefined;
+
+  async function marcar(reserva: Reserva, estado: "atendida" | "ausente") {
+    setMarcando(reserva.id);
+    try {
+      await registrarAsistencia(reserva.id, estado);
+      await cargar();
+    } catch (excepcion) {
+      setError(excepcion instanceof Error ? excepcion.message : "No se pudo registrar la asistencia");
+    } finally {
+      setMarcando(null);
+    }
+  }
+
+  return (
+    <section>
+      <div className="mb-4 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setFecha(sumarDias(fecha, -1))}
+          className="rounded-md border border-slate-300 bg-white p-2 text-slate-700 hover:border-institucional-500"
+          aria-label="Día anterior"
+        >
+          <ChevronLeft size={16} aria-hidden />
+        </button>
+        <button
+          type="button"
+          onClick={() => setFecha(hoy)}
+          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:border-institucional-500"
+        >
+          Hoy
+        </button>
+        <button
+          type="button"
+          onClick={() => setFecha(sumarDias(fecha, 1))}
+          className="rounded-md border border-slate-300 bg-white p-2 text-slate-700 hover:border-institucional-500"
+          aria-label="Día siguiente"
+        >
+          <ChevronRight size={16} aria-hidden />
+        </button>
+        <h3 className="ml-2 text-lg font-semibold text-slate-900">
+          {etiquetaDiaLarga(fecha)}
+          {fecha === hoy && (
+            <span className="ml-2 rounded bg-institucional-600 px-1.5 py-0.5 align-middle text-xs font-medium text-white">
+              hoy
+            </span>
+          )}
+        </h3>
+      </div>
+
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Indicador icono={CalendarClock} etiqueta="Turnos del día" valor={String(vigentes.length)} detalle="Todas las agendas" />
+        <Indicador icono={Clock} etiqueta="Por atender" valor={String(cuenta("confirmada"))} detalle="Confirmados sin marcar" />
+        <Indicador icono={UserCheck} etiqueta="Atendidos" valor={String(cuenta("atendida"))} detalle="Vinieron" />
+        <Indicador icono={UserX} etiqueta="Ausentes" valor={String(cuenta("ausente"))} detalle="No vinieron" />
+      </div>
+
+      {bloqueos.map(({ agenda, motivo }) => (
+        <p
+          key={agenda.id}
+          className="mb-3 flex items-center gap-2 rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-800"
+        >
+          <Ban size={15} aria-hidden />
+          {agenda.nombre}: sin atención este día ({motivo}).
+        </p>
+      ))}
+
+      {error && (
+        <p className="mb-3 flex items-center gap-2 rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-800">
+          <AlertCircle size={16} aria-hidden />
+          {error}
+        </p>
+      )}
+
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        {cargando ? (
+          <p className="px-5 py-8 text-sm text-slate-500">Cargando turnos…</p>
+        ) : visibles.length === 0 ? (
+          <p className="px-5 py-10 text-center text-sm text-slate-500">No hay turnos dados para este día.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {visibles.map(({ reserva, agenda }) => {
+              const { hora } = enArgentina(new Date(reserva.fecha_hora));
+              const esProximo = reserva.id === proximo;
+              return (
+                <li
+                  key={reserva.id}
+                  className={`flex flex-wrap items-center gap-x-5 gap-y-2 px-5 py-3 ${
+                    esProximo ? "bg-institucional-50" : reserva.estado === "cancelada" ? "opacity-60" : ""
+                  }`}
+                >
+                  <div className="w-16 shrink-0">
+                    <div className="text-lg font-semibold tabular-nums text-slate-900">{hora}</div>
+                    {esProximo && (
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-institucional-700">
+                        Próximo
+                      </span>
+                    )}
+                  </div>
+                  <div className="min-w-44 flex-1">
+                    <div className="font-medium text-slate-900">{reserva.ciudadano.nombre}</div>
+                    <div className="text-xs text-slate-500">DNI {reserva.ciudadano.documento}</div>
+                  </div>
+                  <div className="min-w-44 flex-1 text-sm text-slate-700">
+                    <div>{agenda.nombre}</div>
+                    {agenda.sede && (
+                      <div className="flex items-center gap-1 text-xs text-slate-500">
+                        <MapPin size={12} aria-hidden />
+                        {agenda.sede}
+                      </div>
+                    )}
+                  </div>
+                  <Link
+                    to={`/casos/${reserva.caso_id}`}
+                    className="font-mono text-xs text-institucional-600 hover:underline"
+                  >
+                    {reserva.referencia}
+                  </Link>
+                  <div className="flex w-56 items-center justify-end gap-2">
+                    {reserva.estado === "confirmada" && fecha <= hoy ? (
+                      <>
+                        <button
+                          type="button"
+                          disabled={marcando !== null}
+                          onClick={() => void marcar(reserva, "atendida")}
+                          className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700 active:translate-y-px disabled:opacity-50"
+                        >
+                          <UserCheck size={14} aria-hidden />
+                          Vino
+                        </button>
+                        <button
+                          type="button"
+                          disabled={marcando !== null}
+                          onClick={() => void marcar(reserva, "ausente")}
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:border-amber-500 hover:text-amber-800 active:translate-y-px disabled:opacity-50"
+                        >
+                          <UserX size={14} aria-hidden />
+                          No vino
+                        </button>
+                      </>
+                    ) : (
+                      <EstadoTurno estado={reserva.estado} />
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {cancelados > 0 && (
+        <button
+          type="button"
+          onClick={() => setVerCancelados((valor) => !valor)}
+          className="mt-3 text-sm text-institucional-600 hover:underline"
+        >
+          {verCancelados
+            ? "Ocultar los cancelados"
+            : `Ver ${cancelados === 1 ? "el turno cancelado" : `los ${cancelados} turnos cancelados`}`}
+        </button>
+      )}
+    </section>
   );
 }

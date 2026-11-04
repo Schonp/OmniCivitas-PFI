@@ -1,5 +1,6 @@
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import select
@@ -135,3 +136,35 @@ async def primeros_mensajes_de_casos(
     for caso_id, contenido in de_menu.items():
         primeros.setdefault(caso_id, contenido)
     return primeros
+
+
+@dataclass
+class ActividadCaso:
+    mensajes: int
+    ultimo: Interaccion | None
+    # Los canales por los que pasó la conversación, en el orden en que aparecieron.
+    recorrido: list[Canal]
+
+
+async def actividad_de_casos(
+    db: AsyncSession, caso_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, ActividadCaso]:
+    """Cuántos mensajes tiene cada caso, el último y por qué canales pasó.
+
+    Sin las notas internas: es lo que se conversó con el ciudadano.
+    """
+    if not caso_ids:
+        return {}
+    filas = await db.execute(
+        select(Interaccion)
+        .where(Interaccion.caso_id.in_(caso_ids), Interaccion.interna.is_(False))
+        .order_by(Interaccion.timestamp)
+    )
+    actividad = {caso_id: ActividadCaso(0, None, []) for caso_id in caso_ids}
+    for interaccion in filas.scalars():
+        del_caso = actividad[interaccion.caso_id]
+        del_caso.mensajes += 1
+        del_caso.ultimo = interaccion
+        if interaccion.canal not in del_caso.recorrido:
+            del_caso.recorrido.append(interaccion.canal)
+    return actividad

@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   AlertCircle,
   ArrowLeft,
+  ContactRound,
   EyeOff,
   RefreshCw,
   Send,
@@ -129,6 +130,16 @@ export function DetalleCaso() {
     void cargar();
   }, [cargar]);
 
+  // Al pasar de un caso a otro (por ejemplo, desde el aviso de un derivado)
+  // React reusa esta pantalla: sin esto, la respuesta a medio escribir del caso
+  // anterior quedaba en la caja del nuevo.
+  useEffect(() => {
+    setRespuesta("");
+    setNotaInterna(false);
+    setMotivo("");
+    pegadoAlFondo.current = true;
+  }, [casoId]);
+
   useEffect(() => {
     // Lo que el ciudadano acaba de escribir aparece solo: el operador no tiene
     // que recargar la página para enterarse. Se saltea el ciclo con la pestaña
@@ -241,6 +252,13 @@ export function DetalleCaso() {
               <span className="font-mono">{idCorto(caso.id)}</span> · Abierto el{" "}
               {formatearFechaHora(caso.created_at)}
             </p>
+            <Link
+              to={`/ciudadanos/${caso.ciudadano_id}`}
+              className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-institucional-600 hover:underline"
+            >
+              <ContactRound size={15} aria-hidden />
+              Ver la ficha del vecino: todos sus casos y canales
+            </Link>
 
             <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
               <span className="flex items-center gap-1.5">

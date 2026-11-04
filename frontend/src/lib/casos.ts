@@ -1,6 +1,7 @@
 import { descargar, request, requestConTotal } from "./api";
 import type {
   Auditoria,
+  AvisoCaso,
   Caso,
   EstadoCaso,
   Interaccion,
@@ -56,6 +57,14 @@ export interface ConteoCasos {
 
 export async function contarCasos(): Promise<ConteoCasos> {
   return request<ConteoCasos>("/api/casos/conteos");
+}
+
+/** Sin `desde` solo devuelve la hora del servidor, para empezar a contar desde ahí. */
+export async function consultarAvisos(
+  desde?: string,
+): Promise<{ ahora: string; avisos: AvisoCaso[] }> {
+  const query = desde ? `?desde=${encodeURIComponent(desde)}` : "";
+  return request(`/api/casos/avisos${query}`);
 }
 
 export async function listarUsuarios(): Promise<Usuario[]> {

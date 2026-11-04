@@ -49,6 +49,7 @@ export interface OperadorResumen {
 
 export interface Caso {
   id: string;
+  referencia: string;
   ciudadano_id: string;
   ciudadano: CiudadanoResumen;
   operador_asignado: OperadorResumen | null;
@@ -136,6 +137,50 @@ export interface Interaccion {
   actor: ActorInteraccion;
   interna: boolean;
   timestamp: string;
+}
+
+/** Un caso que llegó a la bandeja de quien mira: derivado por el agente o asignado. */
+export interface AvisoCaso {
+  caso: Caso;
+  motivo: "derivado" | "asignado";
+  momento: string;
+}
+
+export interface UltimoMensaje {
+  actor: ActorInteraccion;
+  canal: Canal;
+  contenido: string;
+  timestamp: string;
+}
+
+export interface CasoEnFicha {
+  id: string;
+  referencia: string;
+  tipo: TipoCaso;
+  estado: EstadoCaso;
+  canal_origen: Canal;
+  canal_actual: Canal;
+  operador_asignado: OperadorResumen | null;
+  created_at: string;
+  updated_at: string;
+  mensajes: number;
+  /** Los canales por los que pasó la conversación, en orden. */
+  recorrido: Canal[];
+  /** Si no, la ficha no trae el resumen ni el último mensaje del caso. */
+  puede_abrir: boolean;
+  resumen_ia: string | null;
+  ultimo_mensaje: UltimoMensaje | null;
+}
+
+export interface FichaCiudadano {
+  id: string;
+  nombre: string;
+  documento: string;
+  identificado: boolean;
+  canales: Canal[];
+  primer_contacto: string | null;
+  ultimo_contacto: string | null;
+  casos: CasoEnFicha[];
 }
 
 export interface Auditoria {

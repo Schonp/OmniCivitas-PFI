@@ -4,6 +4,7 @@ import { useAuth } from "./auth";
 import { Layout } from "./componentes/Layout";
 import { Conocimiento } from "./paginas/Conocimiento";
 import { DetalleCaso } from "./paginas/DetalleCaso";
+import { FichaCiudadano } from "./paginas/FichaCiudadano";
 import { Login } from "./paginas/Login";
 import { Panel } from "./paginas/Panel";
 import { ReclamosComunes } from "./paginas/ReclamosComunes";
@@ -35,6 +36,7 @@ export function App() {
       >
         <Route path="/casos" element={<Panel />} />
         <Route path="/casos/:casoId" element={<DetalleCaso />} />
+        <Route path="/ciudadanos/:ciudadanoId" element={<FichaCiudadano />} />
         <Route path="/turnos" element={<Turnos />} />
         <Route path="/conocimiento" element={<Conocimiento />} />
         <Route path="/reclamos-comunes" element={<ReclamosComunes />} />

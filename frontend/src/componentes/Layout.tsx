@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 
 import { useAuth } from "../auth";
+import { AvisoDerivados } from "./AvisoDerivados";
 import logoOmniCivitas from "../assets/logo-omnicivitas.png";
 
 const ESTILO_NAV_BASE = "rounded-md px-3 py-1.5 text-sm font-medium transition";
@@ -45,6 +46,7 @@ export function Layout() {
 
           {usuario && (
             <div className="flex items-center gap-4 text-sm">
+              <AvisoDerivados />
               <div className="text-right leading-tight">
                 <div className="font-medium">{usuario.nombre}</div>
                 <div className="text-institucional-100 capitalize">{usuario.rol}</div>

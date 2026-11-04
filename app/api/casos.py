@@ -1,6 +1,7 @@
 import csv
 import io
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.resumen import generar_resumen_caso
 from app.channels import salida
 from app.core.dependencies import get_current_user, requiere_rol
-from app.db.crud.auditoria import listar_auditoria_de_caso, registrar_auditoria
+from app.db.crud.auditoria import eventos_desde, listar_auditoria_de_caso, registrar_auditoria
 from app.db.crud.casos import (
     actualizar_resumen_caso,
     asignar_caso,
@@ -18,6 +19,7 @@ from app.db.crud.casos import (
     crear_caso,
     esperas_de_casos,
     listar_casos,
+    listar_casos_por_ids,
     obtener_caso_por_id,
     responder_caso,
 )
@@ -31,6 +33,8 @@ from app.db.models import ActorInteraccion, Caso, EstadoCaso, RolUsuario, Usuari
 from app.db.session import get_db
 from app.schemas.auditoria import AuditoriaOut
 from app.schemas.caso import (
+    AvisoCasoOut,
+    AvisosOut,
     CasoAsignacionUpdate,
     CasoCreate,
     CasoEstadoUpdate,
@@ -127,6 +131,52 @@ async def conteos(
     )
     activos = sum(cantidad for estado, cantidad in por_estado.items() if estado != EstadoCaso.cerrado.value)
     return ConteoCasosOut(todos=activos, por_estado=por_estado)
+
+
+@router.get("/avisos", response_model=AvisosOut)
+async def avisos(
+    desde: datetime | None = Query(
+        default=None, description="Sin `desde` solo devuelve la hora: no avisa de lo anterior."
+    ),
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_current_user),
+) -> AvisosOut:
+    """Casos que llegaron a la bandeja de quien mira desde `desde`, para avisarle.
+
+    Se mira la auditoría y no el estado: al derivar, el caso se asigna en el
+    mismo momento a un operador y pasa a en progreso, así que casi nunca se lo
+    encuentra como escalado. El supervisor recibe las derivaciones; el operador,
+    además, los casos que le asignaron.
+    """
+    ahora = datetime.now(timezone.utc)
+    if desde is None:
+        return AvisosOut(ahora=ahora, avisos=[])
+
+    es_operador = usuario_actual.rol == RolUsuario.operador
+    acciones = ("escalado", "asignacion") if es_operador else ("escalado",)
+    eventos = await eventos_desde(db, acciones, desde)
+    casos = {c.id: c for c in await listar_casos_por_ids(db, list({e.caso_id for e in eventos}))}
+
+    por_caso: dict[uuid.UUID, AvisoCasoOut] = {}
+    for evento in eventos:
+        caso = casos[evento.caso_id]
+        if caso.estado == EstadoCaso.cerrado:
+            continue
+        if es_operador and caso.operador_asignado_id != usuario_actual.id:
+            continue
+        # Una derivación trae su asignación detrás: se avisa una vez, como derivado.
+        anterior = por_caso.get(caso.id)
+        derivado = evento.accion == "escalado" or (
+            anterior is not None and anterior.motivo == "derivado"
+        )
+        por_caso[caso.id] = AvisoCasoOut(
+            caso=CasoOut.model_validate(caso),
+            motivo="derivado" if derivado else "asignado",
+            momento=evento.timestamp,
+        )
+    return AvisosOut(
+        ahora=ahora, avisos=sorted(por_caso.values(), key=lambda a: a.momento, reverse=True)
+    )
 
 
 @router.get("/exportar")

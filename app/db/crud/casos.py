@@ -89,6 +89,23 @@ async def listar_casos_activos_de_ciudadano(
     return list((await db.execute(consulta)).scalars().all())
 
 
+async def listar_casos_por_ids(db: AsyncSession, ids: list[uuid.UUID]) -> list[Caso]:
+    if not ids:
+        return []
+    consulta = _con_relaciones(select(Caso)).where(Caso.id.in_(ids))
+    return list((await db.execute(consulta)).scalars().all())
+
+
+async def listar_casos_de_ciudadano(db: AsyncSession, ciudadano_id: uuid.UUID) -> list[Caso]:
+    """Todos sus casos, cerrados incluidos, del más reciente al más viejo."""
+    consulta = (
+        _con_relaciones(select(Caso))
+        .where(Caso.ciudadano_id == ciudadano_id)
+        .order_by(Caso.created_at.desc())
+    )
+    return list((await db.execute(consulta)).scalars().all())
+
+
 def _filtrar_casos(
     consulta,
     *,
