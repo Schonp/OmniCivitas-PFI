@@ -179,3 +179,29 @@ async def test_solo_el_supervisor_cambia_el_titulo(client, auth_headers, headers
     assert del_supervisor.json()["titulo"] == "Pozo en Guatemala 4100"
     auditoria = await client.get(f"/api/casos/{caso_id}/auditoria", headers=auth_headers)
     assert any(evento["accion"] == "cambio_titulo" for evento in auditoria.json())
+
+
+async def test_la_llamada_solo_ofrece_retomar_casos_abiertos(db_session):
+    """Un caso en progreso o escalado lo atiende una persona, y por teléfono no
+    hay operadores: ofrecerlo era nombrar un caso que el agente no puede seguir."""
+    from app.channels.whatsapp import normalizar_telefono
+    from app.db.models import EstadoCaso
+
+    ciudadano = await voz.identificar_ciudadano(db_session, normalizar_telefono(TELEFONO))
+    for estado, titulo in [
+        (EstadoCaso.abierto, "Pozo en Guatemala 4100"),
+        (EstadoCaso.en_progreso, "Consulta que tomó un operador"),
+        (EstadoCaso.escalado, "Trámite derivado"),
+        (EstadoCaso.cerrado, "Turno ya reservado"),
+    ]:
+        db_session.add(
+            Caso(ciudadano_id=ciudadano.id, tipo=TipoCaso.reclamo, estado=estado, titulo=titulo,
+                 canal_origen=Canal.voz, canal_actual=Canal.voz)
+        )
+    await db_session.commit()
+
+    saludo, ofertas = await voz.saludo_inicial_con_ofertas(db_session, TELEFONO)
+
+    assert len(ofertas) == 1
+    assert "pozo en Guatemala 4100" in saludo
+    assert "operador" not in saludo and "derivado" not in saludo and "reservado" not in saludo

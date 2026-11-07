@@ -31,7 +31,7 @@ from app.agents.graph import procesar_mensaje
 from app.agents.state import AgentState
 from app.core.config import settings
 from app.db.crud.ciudadanos import (
-    crear_ciudadano,
+    alta_por_contacto,
     documento_provisorio,
     obtener_ciudadano_por_telefono,
 )
@@ -157,7 +157,7 @@ async def identificar_ciudadano(
         return ciudadano
 
     logger.info("canal whatsapp: alta de ciudadano por primer contacto")
-    return await crear_ciudadano(
+    return await alta_por_contacto(
         db,
         CiudadanoCreate(
             documento=documento_provisorio(telefono),

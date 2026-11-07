@@ -54,12 +54,12 @@ from app.channels.whatsapp import normalizar_telefono
 from app.core.config import settings
 from app.db.crud.casos import listar_casos_activos_de_ciudadano
 from app.db.crud.ciudadanos import (
-    crear_ciudadano,
+    alta_por_contacto,
     documento_provisorio,
     obtener_ciudadano_por_telefono,
 )
 from app.db.crud.interacciones import primeros_mensajes_de_casos
-from app.db.models import Canal, Ciudadano
+from app.db.models import Canal, Ciudadano, EstadoCaso
 from app.schemas.ciudadano import CiudadanoCreate
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,7 @@ async def identificar_ciudadano(db: AsyncSession, telefono: str) -> Ciudadano:
         return ciudadano
 
     logger.info("canal voz: alta de ciudadano por primer contacto")
-    return await crear_ciudadano(
+    return await alta_por_contacto(
         db,
         CiudadanoCreate(
             documento=documento_provisorio(telefono),
@@ -183,7 +183,14 @@ async def saludo_inicial_con_ofertas(db: AsyncSession, telefono: str) -> tuple[s
     casos en curso) en vez de pasar por el grafo con un mensaje inventado."""
     numero = normalizar_telefono(telefono)
     ciudadano = await identificar_ciudadano(db, numero)
-    casos_en_curso = await listar_casos_activos_de_ciudadano(db, ciudadano.id)
+    # Solo los casos abiertos: uno en progreso o escalado ya lo está atendiendo
+    # una persona, y por teléfono no hay operadores que lo puedan retomar.
+    # Ofrecerlo era nombrarle al vecino un caso que el agente no puede seguir.
+    casos_en_curso = [
+        caso
+        for caso in await listar_casos_activos_de_ciudadano(db, ciudadano.id)
+        if caso.estado == EstadoCaso.abierto
+    ]
     primeros = await primeros_mensajes_de_casos(db, [caso.id for caso in casos_en_curso])
     ofertas = armar_ofertas(casos_en_curso)
     primer_contacto = await es_primer_contacto(db, ciudadano.id)

@@ -114,3 +114,47 @@ async def test_al_sumar_el_contacto_los_casos_del_provisorio_pasan_a_la_persona(
 
     duenio = (await db_session.execute(select(Caso.ciudadano_id).where(Caso.id == caso.id))).scalar_one()
     assert duenio == del_padron.id
+
+
+async def test_si_la_persona_ya_tenia_otro_telefono_queda_el_que_esta_usando(db_session):
+    """Pasó probando la demo: el registro con DNI tenía el número del teléfono
+    de prueba, el vecino se identificó desde su celular por WhatsApp y su
+    celular se descartaba. Desde ahí WhatsApp dejó de contestarle: cada mensaje
+    chocaba con el registro provisorio que había quedado vacío."""
+    from sqlalchemy import select
+
+    from app.db.crud.ciudadanos import obtener_ciudadano_por_telefono
+
+    del_padron = await crear_ciudadano(
+        db_session, CiudadanoCreate(documento="30123456", nombre="Pedro", telefono="+15550000001")
+    )
+    celular = "+5491155550123"
+    provisorio = await crear_ciudadano(
+        db_session, CiudadanoCreate(documento=documento_provisorio(celular), nombre="Pedro", telefono=celular)
+    )
+
+    resultado = await identificar_ciudadano(db_session, provisorio.id, documento="30123456", nombre="Pedro")
+    await db_session.commit()
+
+    assert resultado.id == del_padron.id
+    assert (await obtener_ciudadano_por_telefono(db_session, celular)).id == del_padron.id
+    restantes = (
+        await db_session.execute(select(Ciudadano).where(Ciudadano.documento == documento_provisorio(celular)))
+    ).scalars().all()
+    assert restantes == [], "el registro provisorio no queda huérfano ocupando el documento"
+
+
+async def test_un_registro_provisorio_huerfano_se_reutiliza_en_vez_de_chocar(db_session):
+    from app.db.crud.ciudadanos import alta_por_contacto
+
+    celular = "+5491155550123"
+    huerfano = await crear_ciudadano(
+        db_session, CiudadanoCreate(documento=documento_provisorio(celular), nombre="Pedro")
+    )
+
+    ciudadano = await alta_por_contacto(
+        db_session, CiudadanoCreate(documento=documento_provisorio(celular), nombre="Pedro", telefono=celular)
+    )
+
+    assert ciudadano.id == huerfano.id
+    assert ciudadano.telefono == celular

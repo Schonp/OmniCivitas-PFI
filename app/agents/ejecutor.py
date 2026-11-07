@@ -450,6 +450,35 @@ async def _es_pedido_de_turno(state: AgentState, db: AsyncSession, dichos: list[
     return agenda_nombrada(await listar_agendas(db), dichos) is not None
 
 
+# El modelo le pregunta al vecino para qué día u horario quiere el turno.
+_PREGUNTA_EL_DIA = re.compile(
+    r"qu[eé] d[ií]a|d[ií]a y (?:hora|horario)|para cu[aá]ndo|qu[eé] (?:fecha|horario)", re.IGNORECASE
+)
+
+
+async def _con_horarios_libres(
+    state: AgentState, db: AsyncSession, dichos: list[str], texto: str
+) -> str:
+    """Si el modelo le pregunta el día de un turno con sus propias palabras, se
+    le ofrecen en cambio horarios libres concretos de esa agenda.
+
+    Pasó probando el guion de la demo: después de identificarse, el modelo
+    preguntó "¿Para qué día y horario quiere el turno?" y el vecino tenía que
+    adivinar uno libre. La oferta por código solo salía cuando el modelo
+    intentaba reservar con una fecha inventada."""
+    if dijo_un_dia(dichos) or not _PREGUNTA_EL_DIA.search(texto):
+        return texto
+    if not await _es_pedido_de_turno(state, db, dichos):
+        return texto
+    agenda = agenda_nombrada(await listar_agendas(db), dichos)
+    if agenda is None:
+        return texto
+    libres = await proximos_horarios_libres(db, agenda)
+    if not libres:
+        return texto
+    return pedido_de_dia_y_hora(agenda, Canal(state["canal"]), libres)
+
+
 def dijo_un_dia(dichos_del_ciudadano: list[str]) -> bool:
     """Si el ciudadano nombró un día ("el jueves", "mañana", "5/11", "5 de
     noviembre"). Sin eso, la fecha de la reserva la inventó el modelo."""
@@ -822,6 +851,7 @@ async def _resolver(
                     mensajes.append(HumanMessage(content=CORRECCION_YA_IDENTIFICADO))
                     continue
                 texto = NO_TENGO_ESE_DATO
+            texto = await _con_horarios_libres(state, db, dichos, texto)
             return {
                 "resultado_ejecucion": resultado_ejecucion or None,
                 "caso_id": caso_id,

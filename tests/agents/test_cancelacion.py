@@ -294,3 +294,24 @@ async def test_el_dia_que_dijo_el_ciudadano_manda_sobre_el_del_modelo(db_session
 
     reserva = (await db_session.execute(Reserva.__table__.select())).one()
     assert reserva.fecha_hora.astimezone(__import__("app.db.crud.turnos", fromlist=["x"]).ZONA_HORARIA).strftime("%Y-%m-%d %H:%M") == f"{dia.isoformat()} 09:30"
+
+
+async def test_si_el_modelo_pregunta_el_dia_se_ofrecen_horarios_libres(db_session, ciudadano, mocker):
+    """Pasó probando el guion de la demo: el modelo preguntó "¿Para qué día y
+    horario quiere el turno?" con sus palabras, y el vecino tenía que adivinar
+    un horario libre."""
+    agenda = Turno(nombre="Renovación de DNI", descripcion="Sede.", hora_cierre=time(14, 0))
+    db_session.add(agenda)
+    await db_session.commit()
+    modelo = MagicMock()
+    modelo.bind_tools.return_value.ainvoke = AsyncMock(
+        return_value=AIMessage(content="¿Para qué día y horario quiere el turno de renovación del DNI?")
+    )
+    mocker.patch("app.agents.llm.get_llm_ejecutor", return_value=modelo)
+
+    resultado = await mod.nodo_ejecutor(
+        _estado(ciudadano, "Quiero sacar un turno para renovar el DNI"), db_session
+    )
+
+    assert resultado["respuesta"].startswith("Estos son los próximos horarios libres de Renovación de DNI")
+    assert resultado["respuesta"].count("\n- ") == 3
