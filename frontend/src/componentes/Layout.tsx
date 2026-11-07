@@ -30,7 +30,7 @@ export function Layout() {
   return (
     <div className="min-h-full">
       <header className="bg-institucional-700 text-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
+        <div className="mx-auto flex max-w-[1600px] items-center justify-between px-6 py-3">
           <Link to="/casos" className="flex items-center gap-3">
             <img
               src={logoOmniCivitas}
@@ -64,7 +64,7 @@ export function Layout() {
 
         <nav
           aria-label="Secciones del panel"
-          className="mx-auto flex max-w-7xl flex-wrap items-center gap-1 px-6 pb-3"
+          className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-1 px-6 pb-3"
         >
           <EnlaceNav a="/casos">Casos</EnlaceNav>
           <EnlaceNav a="/turnos">Turnos</EnlaceNav>
@@ -74,7 +74,7 @@ export function Layout() {
         </nav>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-8">
+      <main className="mx-auto max-w-[1600px] px-6 py-8">
         <Outlet />
       </main>
     </div>

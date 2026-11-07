@@ -223,8 +223,12 @@ async def test_sin_dia_dicho_no_reserva_y_lo_pregunta(db_session, ciudadano, moc
         _estado(ciudadano, "Quiero un turno para renovar la licencia"), db_session
     )
 
-    assert resultado["respuesta"].startswith("¿Qué día y a qué hora le queda bien?")
-    assert "Renovación de licencia de conducir" in resultado["respuesta"]
+    # Se le ofrecen horarios libres reales para elegir, en vez de reservar el
+    # que inventó el modelo.
+    assert resultado["respuesta"].startswith(
+        "Estos son los próximos horarios libres de Renovación de licencia de conducir"
+    )
+    assert "¿Le queda bien alguno?" in resultado["respuesta"]
     assert (await db_session.execute(Reserva.__table__.select())).all() == []
 
 

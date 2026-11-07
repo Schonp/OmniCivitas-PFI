@@ -10,7 +10,9 @@ from app.core.config import settings
 from app.agents.ejecutor import _texto
 from app.agents.eleccion import ETIQUETA_TIPO
 from app.agents.state import AgentState
+from app.agents.titulos import titulo_automatico
 from app.db.crud.auditoria import registrar_auditoria
+from app.db.crud.interacciones import primeros_mensajes_de_casos
 from app.db.crud.casos import asignar_caso
 from app.db.crud.usuarios import elegir_operador_con_menos_casos_activos
 from app.db.models import ActorInteraccion, Canal, Caso, EstadoCaso, TipoCaso
@@ -78,7 +80,9 @@ def mensaje_escalado(
     Sin la referencia el ciudadano no tiene con qué reclamar después.
     """
     partes = [MOTIVO_EN_CRIOLLO.get(motivo or "", APERTURA_POR_DEFECTO)]
-    if referencia:
+    if referencia and canal != Canal.voz:
+        # Por llamada no se dicta: no hay dónde anotarlo, y el caso se
+        # encuentra por el número de teléfono.
         partes.append(f"Su pedido quedó registrado con el número {referencia}.")
     partes.append(CIERRE_ESCALADO_VOZ if canal == Canal.voz else CIERRE_ESCALADO)
     return "\n\n".join(partes)
@@ -193,6 +197,11 @@ async def nodo_escalado(state: AgentState, db: AsyncSession) -> dict:
     # el resumen a mano: al derivar, se deja escrito en el caso.
     caso.resumen_ia = resumen
     caso.resumen_ia_generado_en = datetime.now(timezone.utc)
+    # Un caso derivado antes de que ninguna tool lo nombrara se titula con lo
+    # primero que pidió el vecino (o con este mensaje, si es el primero).
+    if not caso.titulo:
+        primeros = await primeros_mensajes_de_casos(db, [caso.id])
+        caso.titulo = titulo_automatico(caso.tipo, primeros.get(caso.id) or state.get("mensaje"))
 
     await registrar_auditoria(
         db,

@@ -169,6 +169,11 @@ class Caso(Base):
     # en vez de aparecer como un mensaje suelto.
     asunto: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
+    # Cómo se le nombra el caso al ciudadano cuando se le ofrece retomarlo ("uno,
+    # reclamo por pozo en Guatemala 4100"). Lo completa el agente al registrar
+    # el reclamo o el turno, y el supervisor lo puede corregir desde el panel.
+    titulo: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
     ciudadano: Mapped["Ciudadano"] = relationship(back_populates="casos")
 
     @property

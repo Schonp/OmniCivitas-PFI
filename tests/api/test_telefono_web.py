@@ -96,15 +96,19 @@ async def test_mientras_se_procesa_un_turno_se_sigue_leyendo_el_audio(mocker):
     import asyncio
     import base64
 
+    from app.channels import voz
+
     habla = base64.b64encode(bytes([0x10]) * 160).decode()  # mu-law fuerte
     silencio = base64.b64encode(bytes([0xFF]) * 160).decode()
+    # Silencio de sobra para cerrar el turno, sea cual sea el umbral.
+    fin_de_turno = voz.CHUNKS_SILENCIO_FIN_TURNO + 5
     mensajes = (
         [{"event": "start", "start": {"streamSid": "sid", "customParameters": {}}}]
         + [{"event": "media", "media": {"payload": habla}}] * 20
-        + [{"event": "media", "media": {"payload": silencio}}] * 30
+        + [{"event": "media", "media": {"payload": silencio}}] * fin_de_turno
         # Llega mientras se procesa el turno: no arma otro.
         + [{"event": "media", "media": {"payload": habla}}] * 20
-        + [{"event": "media", "media": {"payload": silencio}}] * 30
+        + [{"event": "media", "media": {"payload": silencio}}] * fin_de_turno
         + [{"event": "stop"}]
     )
     leidos = 0

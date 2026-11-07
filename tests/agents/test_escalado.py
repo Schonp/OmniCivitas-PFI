@@ -12,6 +12,7 @@ def test_mensaje_escalado_por_voz_avisa_que_el_seguimiento_es_por_whatsapp():
 
     assert "WhatsApp" in mensaje
     assert "este mismo medio" not in mensaje
+    assert "REC-ABC123" not in mensaje, "por llamada no se dicta el número de caso"
 
 
 def test_mensaje_escalado_por_whatsapp_mantiene_el_mismo_medio():

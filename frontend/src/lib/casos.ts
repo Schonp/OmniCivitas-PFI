@@ -105,6 +105,13 @@ export async function asignarCaso(casoId: string, operadorId: string | null): Pr
   });
 }
 
+export async function cambiarTituloCaso(casoId: string, titulo: string): Promise<Caso> {
+  return request<Caso>(`/api/casos/${casoId}/titulo`, {
+    method: "PATCH",
+    body: JSON.stringify({ titulo }),
+  });
+}
+
 export async function generarResumenCaso(casoId: string): Promise<Caso> {
   return request<Caso>(`/api/casos/${casoId}/resumen`, { method: "POST" });
 }

@@ -200,6 +200,110 @@ async def test_saludo_inicial_saluda_sin_menu_y_sin_pasar_por_el_grafo(db_sessio
     assert "1." not in saludo
 
 
+@pytest.mark.parametrize(
+    "transcripcion,esperado",
+    [
+        # Así transcribe Whisper large-v3-turbo un DNI dictado con pausas o de a pares.
+        ("3012-3456", "30123456"),
+        ("Mi DNI es 3 0 1 2 3 4 5 6.", "Mi DNI es 30123456."),
+        ("Mi DNI es 30 12 34 56", "Mi DNI es 30123456"),
+        ("tres cero uno dos tres cuatro cinco seis", "30123456"),
+        ("Mi nombre es Pedro y mi DNI es 30-123-456.", "Mi nombre es Pedro y mi DNI es 30123456."),
+        ("Siete millones: 7 123 456", "Siete millones: 7123456"),
+    ],
+)
+def test_un_dni_dictado_de_a_digitos_se_une_en_un_solo_numero(transcripcion, esperado):
+    assert voz.unir_dni_dictado(transcripcion) == esperado
+
+
+@pytest.mark.parametrize(
+    "transcripcion",
+    [
+        "La dirección es Guatemala 4100.",
+        "Corrientes 1234, 5 B",
+        "Puede ser a las 10 30?",
+        "Mi teléfono es 11 4444 5555",
+        "Tengo dos o tres reclamos",
+        "Uno de los faroles, dos cuadras más allá",
+    ],
+)
+def test_lo_que_no_tiene_largo_de_dni_queda_igual(transcripcion):
+    assert voz.unir_dni_dictado(transcripcion) == transcripcion
+
+
+@pytest.mark.parametrize(
+    "transcripcion,esperado",
+    [
+        # Así transcribe Whisper large-v3-turbo un apellido deletreado.
+        ("Mi nombre es Pedro, S-C-H-O-N.", "Mi nombre es Pedro Schon."),
+        ("Mi nombre es Pedro Schón, se escribe S-C-H-O-N.", "Mi nombre es Pedro Schon."),
+        ("Mi nombre es Laura, J-I-M-E-N-E-Z y mi DNI es 30123456.",
+         "Mi nombre es Laura Jimenez y mi DNI es 30123456."),
+        ("S C H O N", "Schon"),
+    ],
+)
+def test_un_apellido_deletreado_se_escribe_como_palabra(transcripcion, esperado):
+    assert voz.unir_apellido_deletreado(transcripcion) == esperado
+
+
+@pytest.mark.parametrize(
+    "transcripcion",
+    [
+        "Mi nombre es Pedro y mi DNI es 30123456.",
+        "Y a la tarde pasa el camión",
+        "Vivo en Corrientes 1234, 5 B",
+    ],
+)
+def test_sin_deletreo_el_texto_queda_igual(transcripcion):
+    assert voz.unir_apellido_deletreado(transcripcion) == transcripcion
+
+
+def test_una_sigla_deletreada_se_escribe_junta_y_no_como_apellido():
+    assert voz.unir_apellido_deletreado("Mi D-N-I es 30123456") == "Mi DNI es 30123456"
+
+
+def test_el_nombre_deletreado_llega_a_la_identidad():
+    """De punta a punta: lo que transcribe Whisper, normalizado, es lo que la
+    regla de identidad necesita para registrar nombre, apellido y DNI."""
+    from app.agents.identidad import extraer_identidad
+
+    texto = voz.normalizar_dictado("Mi nombre es Pedro, S-C-H-O-N, y mi DNI es 3012-3456.")
+
+    assert extraer_identidad(texto) == ("Pedro Schon", "30123456")
+
+
+async def test_el_saludo_de_la_llamada_lleva_todos_los_avisos_de_una_vez(db_session):
+    """Primer contacto: el saludo dice que habla una IA, que puede pedir una
+    persona y qué datos se guardan, todo junto y antes de la pregunta."""
+    from app.agents.aviso_ia import AVISO_DATOS_VOZ
+
+    saludo = await voz.saludo_inicial(db_session, TELEFONO)
+
+    assert "inteligencia artificial" in saludo
+    assert "persona" in saludo
+    assert AVISO_DATOS_VOZ in saludo
+    assert saludo.endswith("?")
+
+
+async def test_el_primer_turno_de_la_llamada_no_repite_los_avisos(
+    db_session, mock_llms, checkpointer_en_memoria
+):
+    """Los avisos ya se dijeron en el saludo: si el primer turno los volvía a
+    anteponer, la llamada arrancaba con casi un minuto de avisos en dos tandas."""
+    from app.agents.aviso_ia import AVISO_DATOS, AVISO_IA
+
+    mock_llms(
+        ClasificacionIntent(intencion="consulta", entidades={}, confianza=0.9),
+        respuestas_ejecutor=[AIMessage(content="Atendemos de 8 a 14.")],
+    )
+
+    final = await voz.recibir_turno(db_session, telefono=TELEFONO, mensaje="¿Qué horario tienen?")
+
+    assert AVISO_IA not in final["respuesta"]
+    assert AVISO_DATOS not in final["respuesta"]
+    assert final["respuesta"] == "Atendemos de 8 a 14."
+
+
 async def test_recibir_turno_crea_el_caso_con_canal_voz(
     db_session, mock_llms, checkpointer_en_memoria
 ):

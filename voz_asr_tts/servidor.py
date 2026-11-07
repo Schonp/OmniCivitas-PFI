@@ -9,40 +9,86 @@ Expone dos endpoints que usa app/channels/voz.py:
 
 Uso: .venv/Scripts/python.exe -m uvicorn servidor:app --port 8001
 """
+import glob
 import io
 import logging
+import os
 import re
+import sys
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
 
-import numpy as np
-from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
-from faster_whisper import WhisperModel
-from kokoro import KPipeline
-from pydantic import BaseModel
+
+def _registrar_dlls_cuda() -> None:
+    """Hace visibles las DLLs de CUDA que instalan los paquetes nvidia-*-cu12
+    de pip (cuBLAS, cuDNN). Quedan en site-packages/nvidia/*/bin, fuera del
+    PATH, y ctranslate2 las busca recién en la primera transcripción: sin
+    esto falla con "cublas64_12.dll is not found". Tiene que correr antes de
+    importar faster_whisper."""
+    for carpeta in glob.glob(os.path.join(sys.prefix, "Lib", "site-packages", "nvidia", "*", "bin")):
+        os.environ["PATH"] = carpeta + os.pathsep + os.environ["PATH"]
+        if hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(carpeta)
+
+
+_registrar_dlls_cuda()
+
+import numpy as np  # noqa: E402
+from fastapi import FastAPI, HTTPException, UploadFile  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
+from faster_whisper import WhisperModel  # noqa: E402
+from kokoro import KPipeline  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# "small" balancea precisión y latencia para una llamada telefónica; "base" es
-# más rápido pero pierde precisión, "medium"/"large" no corren cómodos en CPU.
-MODELO_WHISPER = "small"
+# En GPU, large-v3-turbo: bastante más preciso que "small" con audio telefónico
+# (8 kHz) y, aun así, ~0,7 s por turno contra ~2,6 s de "small" en CPU. En int8
+# ocupa ~1 GB de VRAM, que entra al lado del LLM en una placa de 8 GB.
+# Si la GPU no está disponible o se queda sin memoria, se cae a "small" en CPU:
+# la llamada es más lenta y menos precisa, pero no se queda sin voz.
+MODELO_WHISPER_GPU = os.environ.get("WHISPER_MODELO", "large-v3-turbo")
+MODELO_WHISPER_CPU = "small"
+
+# Vocabulario del dominio para Whisper: ante un audio dudoso, inclina la
+# transcripción hacia estas palabras ("pozo" y no "pulso"). Es contexto, no una
+# lista cerrada: el ciudadano puede decir cualquier otra cosa.
+CONTEXTO_WHISPER = (
+    "Llamada a la línea de atención ciudadana del municipio. Reclamos por pozos, "
+    "baches, veredas rotas, luminarias quemadas, basura y árboles caídos. "
+    "Consultas, trámites y turnos. Nombre y DNI del vecino, calle y altura."
+)
 # Kokoro solo tiene 3 voces en español: ef_dora (femenina, única opción) y dos
 # masculinas (em_alex, em_santa) -- ver DEVLOG.md ("Voces de Kokoro en español").
 VOZ_KOKORO = "ef_dora"
 SAMPLE_RATE_KOKORO = 24000
 
 _whisper: WhisperModel | None = None
+_whisper_descripcion = ""
 _kokoro: KPipeline | None = None
+
+
+def _cargar_whisper() -> tuple[WhisperModel, str]:
+    """Whisper en GPU si se puede; si no, el de CPU. La prueba con un segundo
+    de silencio es necesaria: las DLLs de CUDA faltantes o la falta de VRAM
+    recién aparecen al transcribir, no al cargar el modelo."""
+    try:
+        modelo = WhisperModel(MODELO_WHISPER_GPU, device="cuda", compute_type="int8_float16")
+        list(modelo.transcribe(np.zeros(16000, dtype=np.float32), language="es")[0])
+        return modelo, f"{MODELO_WHISPER_GPU} en GPU"
+    except Exception:  # noqa: BLE001 -- cualquier falla de GPU cae al plan B
+        logger.exception("Whisper no pudo correr en GPU: se usa %s en CPU", MODELO_WHISPER_CPU)
+        modelo = WhisperModel(MODELO_WHISPER_CPU, device="cpu", compute_type="int8")
+        return modelo, f"{MODELO_WHISPER_CPU} en CPU (respaldo)"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _whisper, _kokoro
-    logger.info("Cargando faster-whisper (%s) y Kokoro...", MODELO_WHISPER)
-    _whisper = WhisperModel(MODELO_WHISPER, device="cpu", compute_type="int8")
+    global _whisper, _whisper_descripcion, _kokoro
+    logger.info("Cargando faster-whisper y Kokoro...")
+    _whisper, _whisper_descripcion = _cargar_whisper()
     _kokoro = KPipeline(lang_code="e")
-    logger.info("ASR/TTS listos.")
+    logger.info("ASR/TTS listos. Whisper: %s", _whisper_descripcion)
     yield
 
 
@@ -64,6 +110,7 @@ async def health() -> dict:
     return {
         "status": "ok",
         "whisper_listo": _whisper is not None,
+        "whisper": _whisper_descripcion,
         "kokoro_listo": _kokoro is not None,
     }
 
@@ -81,7 +128,13 @@ async def transcribir(audio: UploadFile) -> TranscripcionSalida:
         raise HTTPException(status_code=422, detail="Audio vacío")
 
     segmentos, info = _whisper.transcribe(
-        io.BytesIO(contenido), language="es", beam_size=5
+        io.BytesIO(contenido),
+        language="es",
+        beam_size=5,
+        initial_prompt=CONTEXTO_WHISPER,
+        # Descarta los tramos sin voz antes de transcribir: con un contexto
+        # cargado, Whisper tiende a "inventar" texto sobre el ruido de línea.
+        vad_filter=True,
     )
     texto = " ".join(segmento.text.strip() for segmento in segmentos).strip()
     return TranscripcionSalida(

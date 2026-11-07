@@ -267,5 +267,5 @@ async def test_el_primer_contacto_informa_que_datos_se_guardan_y_como_ejercer_de
     )
 
     assert AVISO_DATOS in primero["respuesta"]
-    assert "dar de baja" in AVISO_DATOS
+    assert "eliminar" in AVISO_DATOS
     assert AVISO_DATOS not in segundo["respuesta"]

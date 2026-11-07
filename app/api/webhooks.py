@@ -170,6 +170,7 @@ async def _procesar_turno_de_voz(
     telefono: str | None,
     audio_mulaw: bytes,
     avisar: Avisar = _sin_avisos,
+    llamada: dict | None = None,
 ) -> None:
     """Un turno completo: ASR -> grafo -> TTS -> audio de vuelta. No propaga
     excepciones: un fallo puntual de ASR/TTS no debe cortar la llamada entera,
@@ -191,8 +192,11 @@ async def _procesar_turno_de_voz(
             return
         await avisar({"event": "subtitulo", "quien": "ciudadano", "texto": texto})
 
+        # Los casos que el saludo le acaba de enumerar valen solo para esta
+        # respuesta: se consumen acá.
+        ofertas = (llamada or {}).pop("ofertas", None)
         async with async_session_factory() as db:
-            final = await voz.recibir_turno(db, telefono=telefono, mensaje=texto)
+            final = await voz.recibir_turno(db, telefono=telefono, mensaje=texto, ofertas=ofertas)
 
         respuesta = final.get("respuesta")
         logger.info("canal voz: respuesta del grafo=%r", respuesta)
@@ -211,13 +215,19 @@ async def _procesar_turno_de_voz(
 
 
 async def _saludar(
-    websocket: WebSocket, stream_sid: str, telefono: str, avisar: Avisar = _sin_avisos
+    websocket: WebSocket,
+    stream_sid: str,
+    telefono: str,
+    avisar: Avisar = _sin_avisos,
+    llamada: dict | None = None,
 ) -> None:
     """La IA habla primero apenas conecta la llamada, en vez de esperar en
     silencio a que el ciudadano diga algo -- es lo que un ciudadano espera de
     una línea telefónica real."""
     async with async_session_factory() as db:
-        saludo = await voz.saludo_inicial(db, telefono)
+        saludo, ofertas = await voz.saludo_inicial_con_ofertas(db, telefono)
+    if llamada is not None:
+        llamada["ofertas"] = ofertas
     await avisar({"event": "subtitulo", "quien": "agente", "texto": saludo})
 
     try:
@@ -253,6 +263,8 @@ async def atender_stream(
     telefono: str | None = telefono_fijo
     detector = voz.DetectorDeTurno()
     en_curso: asyncio.Task | None = None
+    # Lo que dura lo que dura la llamada: los casos que el saludo enumeró.
+    llamada: dict = {}
 
     def ocupado() -> bool:
         return en_curso is not None and not en_curso.done()
@@ -270,7 +282,7 @@ async def atender_stream(
                 logger.info("canal voz: llamada iniciada stream_sid=%s", stream_sid)
                 if telefono:
                     en_curso = asyncio.create_task(
-                        _sin_cortes(_saludar(websocket, stream_sid, telefono, avisar))
+                        _sin_cortes(_saludar(websocket, stream_sid, telefono, avisar, llamada))
                     )
 
             elif evento == "media":
@@ -281,7 +293,9 @@ async def atender_stream(
                     audio_turno = detector.tomar_turno()
                     en_curso = asyncio.create_task(
                         _sin_cortes(
-                            _procesar_turno_de_voz(websocket, stream_sid, telefono, audio_turno, avisar)
+                            _procesar_turno_de_voz(
+                                websocket, stream_sid, telefono, audio_turno, avisar, llamada
+                            )
                         )
                     )
 

@@ -59,6 +59,7 @@ export interface Caso {
   canal_actual: Canal;
   operador_asignado_id: string | null;
   motivo_cierre: MotivoCierre | null;
+  titulo: string | null;
   resumen_ia: string | null;
   resumen_ia_generado_en: string | null;
   esperando_desde: string | null;

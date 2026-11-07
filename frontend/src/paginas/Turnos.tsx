@@ -5,7 +5,6 @@ import {
   ArrowRightLeft,
   Ban,
   BellRing,
-  CalendarCheck,
   CalendarClock,
   CalendarPlus,
   CalendarX,
@@ -13,7 +12,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  Gauge,
   MapPin,
   Settings2,
   UserCheck,
@@ -251,18 +249,6 @@ export function Turnos() {
     return [...horas].sort();
   }, [agenda, dias]);
 
-  const indicadores = useMemo(() => {
-    const todas = turnos.flatMap((t) => t.reservas);
-    const ocupan = todas.filter((r) => OCUPA_LUGAR.includes(r.estado));
-    const capacidad = turnos.reduce((total, t) => total + t.capacidad, 0);
-    return {
-      hoy: ocupan.filter((r) => enArgentina(new Date(r.fecha_hora)).fecha === hoy).length,
-      confirmados: todas.filter((r) => r.estado === "confirmada").length,
-      ocupacion: capacidad ? Math.round((ocupan.length / capacidad) * 100) : 0,
-      cancelados: todas.filter((r) => r.estado === "cancelada").length,
-    };
-  }, [turnos, hoy]);
-
   const listado = (agenda?.reservas ?? []).filter((r) => filtro === "todos" || r.estado === filtro);
 
   return (
@@ -387,17 +373,9 @@ export function Turnos() {
 
       {vista === "semana" && agenda && (
         <>
-          <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Indicador icono={CalendarClock} etiqueta="Turnos hoy" valor={String(indicadores.hoy)} detalle="Todas las agendas" />
-            <Indicador icono={CalendarCheck} etiqueta="Confirmados" valor={String(indicadores.confirmados)} detalle="Pendientes en la semana" />
-            <Indicador icono={Gauge} etiqueta="Ocupación" valor={`${indicadores.ocupacion} %`} detalle="Lugares tomados en la semana" />
-            <Indicador icono={CalendarX} etiqueta="Cancelados" valor={String(indicadores.cancelados)} detalle="Liberados en la semana" />
-          </div>
-
           <div className="mb-3 flex flex-wrap gap-2" role="tablist" aria-label="Agendas">
             {turnos.map((t) => {
               const activa = t.id === agenda.id;
-              const ocupacion = t.capacidad ? Math.round((t.ocupados / t.capacidad) * 100) : 0;
               return (
                 <button
                   key={t.id}
@@ -415,12 +393,6 @@ export function Turnos() {
                   }`}
                 >
                   <div className="font-medium">{t.nombre}</div>
-                  <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-                    <span className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-200">
-                      <span className="block h-full bg-institucional-500" style={{ width: `${ocupacion}%` }} />
-                    </span>
-                    {t.ocupados} {t.ocupados === 1 ? "confirmado" : "confirmados"}
-                  </div>
                 </button>
               );
             })}

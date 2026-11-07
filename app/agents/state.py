@@ -36,6 +36,9 @@ class AgentState(TypedDict):
     ofertas: list[dict]
     # El caso que el ciudadano eligió por número.
     caso_elegido: Optional[str]
+    # Dijo que quiere algo nuevo sin decir qué ("quiero hacer una nueva
+    # gestión"): se le pregunta qué necesita, no se clasifica ni se deriva.
+    pide_algo_nuevo: bool
     # Cuántas veces seguidas se repreguntó sin entender. A diferencia del resto
     # del estado, esta clave NO se reinicia en cada mensaje: sobrevive en el
     # checkpointer para poder poner un tope. Ver `_estado_inicial`.

@@ -246,3 +246,36 @@ def test_hoy_mas_temprano_tambien_es_pasado(agenda):
     ahora = datetime.combine(dia_habil(), time(10, 15), tzinfo=ZONA_HORARIA)
     assert motivo_no_valido(agenda, ahora.replace(hour=10, minute=0), ahora) == "Ese horario ya pasó."
     assert motivo_no_valido(agenda, ahora.replace(hour=10, minute=30), ahora) is None
+
+
+# --- Ofrecer horarios cuando el vecino no dijo el día --------------------------
+
+
+async def test_ofrece_horarios_libres_en_dias_distintos_y_salta_los_tomados(db_session, agenda):
+    from app.db.crud.turnos import proximos_horarios_libres
+
+    ahora = momento(1, "07:00")
+    primero = momento(1, "08:00")
+    persona, caso = await _vecino(db_session, "40111222")
+    await _reservar(db_session, agenda, persona, caso, primero)
+
+    libres = await proximos_horarios_libres(db_session, agenda, ahora)
+
+    assert len(libres) == 3
+    assert primero not in libres, "un horario sin cupo no se ofrece"
+    assert len({libre.date() for libre in libres}) == 3, "tres días distintos para elegir"
+
+
+def test_el_pedido_de_dia_ofrece_los_horarios_libres():
+    from app.agents.confirmacion import pedido_de_dia_y_hora
+
+    agenda = Turno(nombre="Renovación de DNI")
+    libres = [momento(2, "8:00"), momento(3, "9:30")]
+
+    texto = pedido_de_dia_y_hora(agenda, Canal.whatsapp, libres)
+    hablado = pedido_de_dia_y_hora(agenda, Canal.voz, libres)
+
+    assert "próximos horarios libres de Renovación de DNI" in texto
+    assert texto.count("\n- ") == 2
+    assert hablado.startswith("Para Renovación de DNI tengo libre el ")
+    assert "\n" not in hablado

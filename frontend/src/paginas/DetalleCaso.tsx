@@ -4,10 +4,13 @@ import { Link, useParams } from "react-router-dom";
 import {
   AlertCircle,
   ArrowLeft,
+  Check,
   ContactRound,
   EyeOff,
+  Pencil,
   RefreshCw,
   Send,
+  X,
   ShieldCheck,
   Sparkles,
   UserRound,
@@ -20,6 +23,7 @@ import { PanelPestana, Pestanas } from "../componentes/Pestanas";
 import {
   asignarCaso,
   cambiarEstadoCaso,
+  cambiarTituloCaso,
   generarResumenCaso,
   listarAuditoria,
   listarInteracciones,
@@ -83,6 +87,8 @@ export function DetalleCaso() {
   const [notaInterna, setNotaInterna] = useState(false);
   const [equipo, setEquipo] = useState<Usuario[]>([]);
   const [generandoResumen, setGenerandoResumen] = useState(false);
+  const [editandoTitulo, setEditandoTitulo] = useState(false);
+  const [titulo, setTitulo] = useState("");
 
   const conversacionRef = useRef<HTMLDivElement>(null);
   const pegadoAlFondo = useRef(true);
@@ -200,6 +206,18 @@ export function DetalleCaso() {
     }
   }
 
+  async function guardarTitulo(evento: FormEvent) {
+    evento.preventDefault();
+    const nuevo = titulo.trim();
+    if (nuevo === "") {
+      return;
+    }
+    await ejecutar(async () => {
+      await cambiarTituloCaso(casoId, nuevo);
+      setEditandoTitulo(false);
+    });
+  }
+
   async function enviarRespuesta(evento: FormEvent) {
     evento.preventDefault();
     const contenido = respuesta.trim();
@@ -246,6 +264,57 @@ export function DetalleCaso() {
               <EstadoBadge estado={caso.estado} />
               <TipoBadge tipo={caso.tipo} />
             </div>
+
+            {/* El título es como se le nombra el caso al ciudadano cuando el
+                agente le ofrece retomarlo. Solo el supervisor lo corrige. */}
+            {editandoTitulo ? (
+              <form onSubmit={guardarTitulo} className="mt-2 flex items-center gap-2">
+                <input
+                  value={titulo}
+                  onChange={(evento) => setTitulo(evento.target.value)}
+                  maxLength={120}
+                  autoFocus
+                  aria-label="Título del caso"
+                  className="w-96 max-w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm focus:border-institucional-500 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={guardando || titulo.trim() === ""}
+                  className="inline-flex items-center gap-1 rounded-md bg-institucional-600 px-2.5 py-1.5 text-sm font-medium text-white hover:bg-institucional-700 disabled:opacity-50"
+                >
+                  <Check size={15} aria-hidden />
+                  Guardar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditandoTitulo(false)}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-100"
+                >
+                  <X size={15} aria-hidden />
+                  Cancelar
+                </button>
+              </form>
+            ) : (
+              <p className="mt-2 flex items-center gap-2 text-base text-slate-800">
+                <span className={caso.titulo ? "font-medium" : "italic text-slate-400"}>
+                  {caso.titulo ?? "Sin título"}
+                </span>
+                {esSupervisor && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTitulo(caso.titulo ?? "");
+                      setEditandoTitulo(true);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-institucional-600 hover:bg-institucional-50"
+                    aria-label="Editar título"
+                  >
+                    <Pencil size={13} aria-hidden />
+                    Editar
+                  </button>
+                )}
+              </p>
+            )}
 
             <p className="mt-2 text-sm text-slate-600">
               DNI {caso.ciudadano.documento} · Caso{" "}

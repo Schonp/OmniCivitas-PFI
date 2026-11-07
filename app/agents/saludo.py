@@ -21,6 +21,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.aviso_ia import AVISO_DATOS_VOZ, RECORDATORIO_DATOS_VOZ
 from app.agents.eleccion import armar_ofertas, numero_de_caso
 from app.agents.state import AgentState
 from app.db.crud.casos import listar_casos_activos_de_ciudadano
@@ -58,12 +59,20 @@ RESPUESTA_SALUDO = f"{PRESENTACION}\n\n{MENU}\n\n{CIERRE}"
 # puede volver a mirarlas, algo que no pasa en una llamada. En vez de eso se
 # abre la conversación con una pregunta abierta, más corta que el texto
 # escrito (ver DEVLOG.md de voz_asr_tts, "Diferenciar voz de texto").
+#
+# Este saludo es lo único que se dice de corrido al empezar cada llamada, así
+# que lleva todos los avisos juntos y nada más: que habla una IA, que puede
+# pedir una persona y, la primera vez, qué datos se guardan (ver
+# `aviso_ia.anteponer_aviso`, que por voz ya no los repite).
 PRESENTACION_VOZ = (
-    "Hola, habla el asistente virtual de atención ciudadana del organismo. "
-    "Le responde una inteligencia artificial, no una persona."
+    "Hola, le habla el asistente virtual del organismo, una inteligencia artificial. "
+    "Si prefiere hablar con una persona, pídamelo cuando quiera."
 )
-PREGUNTA_ABIERTA_VOZ = "Cuénteme con sus palabras qué necesita."
+PREGUNTA_ABIERTA_VOZ = "¿En qué lo puedo ayudar?"
 RESPUESTA_SALUDO_VOZ = f"{PRESENTACION_VOZ} {PREGUNTA_ABIERTA_VOZ}"
+# Una lista larga no se retiene de oído: se nombran los tres más recientes.
+MAX_CASOS_VOZ = 3
+_NUMERO_HABLADO = {1: "uno", 2: "dos", 3: "tres"}
 
 
 # Un título largo tapa la referencia, que es lo que el ciudadano tiene que
@@ -82,16 +91,56 @@ def _recortar(texto: str) -> str:
 def titulo_de_caso(caso: Caso, primer_mensaje: str | None) -> str:
     """Con qué reconoce el ciudadano su propio caso.
 
-    El asunto del correo cuando lo hay —lo escribió él mismo— y si no, sus
-    primeras palabras. La referencia sola no alcanza: nadie se acuerda de qué
-    era REC-A6961E4A.
+    El título del caso (lo pone el agente al registrar el reclamo o el turno, y
+    el supervisor lo puede corregir); si no tiene, el asunto del correo —lo
+    escribió él mismo— y si no, sus primeras palabras. La referencia sola no
+    alcanza: nadie se acuerda de qué era REC-A6961E4A.
     """
+    if caso.titulo:
+        return caso.titulo
     if caso.asunto:
         return _recortar(caso.asunto)
     if primer_mensaje:
         return _recortar(primer_mensaje)
     # Un caso abierto por un operador desde el panel puede no tener ninguna.
     return caso.tipo.value.capitalize()
+
+
+_TIPO_HABLADO = {
+    "reclamo": "reclamo por",
+    "reserva": "turno de",
+    "consulta": "consulta sobre",
+    "tramite": "trámite sobre",
+}
+
+
+def _caso_hablado(caso: Caso, primer_mensaje: str | None) -> str:
+    """"Reclamo por pozo en Guatemala 4100": el título solo no dice si es un
+    reclamo o un turno, y en una llamada no hay etiqueta a la vista."""
+    titulo = titulo_de_caso(caso, primer_mensaje).rstrip("…").rstrip(".")
+    prefijo = _TIPO_HABLADO.get(caso.tipo.value, "")
+    # Si el supervisor ya lo escribió con el tipo adelante, no se repite.
+    if not prefijo or titulo.lower().startswith(prefijo.split()[0]):
+        return titulo
+    return f"{prefijo} {titulo[0].lower() + titulo[1:]}"
+
+
+def _casos_en_curso_hablados(casos: list[Caso], primeros_mensajes: dict) -> str:
+    """"Tiene dos pedidos en curso: uno, reclamo por pozo en Guatemala 4100;
+    dos, turno de licencia de conducir. Para seguir con alguno, dígame el
+    número; si es algo nuevo, cuénteme qué necesita."
+    """
+    titulos = [_caso_hablado(caso, primeros_mensajes.get(caso.id)) for caso in casos]
+    if len(casos) == 1:
+        return (
+            f"Tiene un pedido en curso: {titulos[0][0].lower() + titulos[0][1:]}. Para seguir con ese, dígame «uno»; "
+            "si es algo nuevo, cuénteme qué necesita."
+        )
+    lista = "; ".join(f"{_NUMERO_HABLADO[i]}, {t[0].lower() + t[1:]}" for i, t in enumerate(titulos, start=1))
+    return (
+        f"Tiene {_NUMERO_HABLADO[len(casos)]} pedidos en curso: {lista}. Para seguir con alguno, "
+        "dígame el número; si es algo nuevo, cuénteme qué necesita."
+    )
 
 
 def _linea_de_caso(numero: int, caso: Caso, primer_mensaje: str | None) -> str:
@@ -107,15 +156,16 @@ def armar_saludo(
     primeros_mensajes: dict | None = None,
     ofertas: list[dict] | None = None,
     canal: Canal | None = None,
+    primer_contacto: bool = False,
 ) -> str:
     if canal == Canal.voz:
+        partes = [PRESENTACION_VOZ]
+        partes.append(AVISO_DATOS_VOZ if primer_contacto else RECORDATORIO_DATOS_VOZ)
         if casos_en_curso:
-            return (
-                f"{PRESENTACION_VOZ} Veo que tiene un pedido en curso: si quiere "
-                "continuarlo cuéntemelo, o si prefiere empezar con algo nuevo, "
-                "también dígamelo."
-            )
-        return RESPUESTA_SALUDO_VOZ
+            partes.append(_casos_en_curso_hablados(casos_en_curso[:MAX_CASOS_VOZ], primeros_mensajes or {}))
+        else:
+            partes.append(PREGUNTA_ABIERTA_VOZ)
+        return " ".join(partes)
 
     primeros_mensajes = primeros_mensajes or {}
     ofertas = ofertas or armar_ofertas(casos_en_curso)

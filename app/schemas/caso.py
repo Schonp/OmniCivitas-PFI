@@ -52,6 +52,10 @@ class OperadorResumen(BaseModel):
     nombre: str
 
 
+class CasoTituloUpdate(BaseModel):
+    titulo: str = Field(min_length=1, max_length=120)
+
+
 class CasoAsignacionUpdate(BaseModel):
     operador_asignado_id: uuid.UUID | None = Field(
         default=None, description="null libera el caso."
@@ -95,6 +99,7 @@ class CasoOut(BaseModel):
     canal_actual: Canal
     operador_asignado_id: uuid.UUID | None
     motivo_cierre: str | None
+    titulo: str | None = None
     resumen_ia: str | None
     resumen_ia_generado_en: datetime | None
     esperando_desde: datetime | None = Field(

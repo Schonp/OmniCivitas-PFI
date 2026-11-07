@@ -111,3 +111,29 @@ async def test_crear_reserva_completa_el_caso_ya_abierto_en_vez_de_abrir_otro(
         .all()
     )
     assert len(casos) == 1
+
+
+async def test_con_el_turno_reservado_el_caso_queda_cerrado_como_resuelto(
+    db_session, ciudadano, turno_licencia
+):
+    """El pedido está resuelto: el caso deja de figurar entre los casos en
+    curso. El turno sigue vigente en la agenda."""
+    from app.db.models import EstadoCaso, EstadoReserva
+
+    resultado = await crear_reserva(
+        db_session,
+        ciudadano_id=ciudadano.id,
+        canal=Canal.whatsapp,
+        turno=turno_licencia.nombre,
+        fecha_hora=horario(),
+    )
+
+    caso = await db_session.get(Caso, uuid.UUID(resultado["caso_id"]))
+    reserva = await db_session.get(Reserva, uuid.UUID(resultado["reserva_id"]))
+    assert caso.estado == EstadoCaso.cerrado
+    assert caso.motivo_cierre == "resuelto"
+    assert reserva.estado == EstadoReserva.confirmada
+    acciones = (
+        await db_session.execute(select(Auditoria.accion).where(Auditoria.caso_id == caso.id))
+    ).scalars().all()
+    assert "cambio_estado" in acciones

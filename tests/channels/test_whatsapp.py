@@ -46,6 +46,10 @@ def _payload(texto: str = "El poste no anda", *, tipo: str = "text", nombre: str
         (TELEFONO, TELEFONO),
         ("+54 9 11 3333-4444", TELEFONO),
         ("  whatsapp:+5491133334444  ", TELEFONO),
+        # Así llega el mismo celular por una llamada de Twilio: sin el 9.
+        ("+541133334444", TELEFONO),
+        # Un número que no es argentino no se toca.
+        ("+15551234567", "+15551234567"),
     ],
 )
 def test_normalizar_telefono_deja_formato_internacional(entrada, esperado):

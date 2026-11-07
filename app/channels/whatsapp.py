@@ -69,6 +69,13 @@ def normalizar_telefono(valor: str) -> str:
         numero = numero[len("whatsapp:") :]
     if numero and not numero.startswith("+"):
         numero = "+" + numero
+    # Un celular argentino llega con dos formas según el canal: WhatsApp lo
+    # manda con el 9 (+54 9 11 5555 0123) y la telefonía, sin él (+54 11 5555
+    # 0123). Sin unificarlos, el vecino que escribió por WhatsApp y después
+    # llama no se reconoce como el mismo: se le piden los datos de nuevo y la
+    # continuidad entre canales se corta. Se guarda siempre con el 9.
+    if numero.startswith("+54") and not numero.startswith("+549") and len(numero) == len("+54") + 10:
+        numero = "+549" + numero[len("+54"):]
     return numero
 
 

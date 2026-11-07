@@ -31,11 +31,27 @@ RESPUESTA_OPCIONES = (
 )
 
 
+# Por voz no se lee una lista numerada: se nombran las opciones en una frase.
+RESPUESTA_OPCIONES_VOZ = (
+    "Perdón, no me quedó claro qué necesita. ¿Es un reclamo, una consulta o un turno? "
+    "Con una frase contándome qué pasa me alcanza."
+)
+RESPUESTA_ALGO_NUEVO = "Claro. Cuénteme qué necesita: un reclamo, una consulta o un turno."
+
+
 async def nodo_opciones(state: AgentState) -> dict:
+    if state.get("pide_algo_nuevo"):
+        # Pidió empezar algo nuevo: no es que no se le entendió.
+        return {
+            "respuesta": RESPUESTA_ALGO_NUEVO,
+            "caso_id": None,
+            "tipo_sin_definir": True,
+            "requiere_escalado": False,
+        }
     vueltas = state.get("vueltas_sin_definir", 0) + 1
     logger.debug("opciones: se repregunta sin abrir caso (vuelta %s)", vueltas)
     return {
-        "respuesta": RESPUESTA_OPCIONES,
+        "respuesta": RESPUESTA_OPCIONES_VOZ if state.get("canal") == "voz" else RESPUESTA_OPCIONES,
         # Sin tipo no hay caso: etiquetarlo ahora sería adivinar.
         "caso_id": None,
         "tipo_sin_definir": True,

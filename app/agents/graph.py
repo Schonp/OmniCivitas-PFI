@@ -21,6 +21,7 @@ from app.agents.opciones import nodo_opciones
 from app.agents.saludo import nodo_saludo
 from app.agents.seguridad import con_aviso_de_seguridad, ofrece_dato_sensible
 from app.agents.state import AgentState
+from app.agents.titulos import titulo_automatico
 from app.core.config import settings
 from app.db.crud.auditoria import registrar_auditoria
 from app.db.crud.casos import obtener_caso_activo_de_ciudadano
@@ -138,6 +139,12 @@ def decidir_ruta(state: AgentState) -> str:
     if state["intencion"] == "saludo":
         return "saludo"
 
+    # "Quiero hacer una nueva gestión": todavía no dijo qué. Se le pregunta, sin
+    # contar como vuelta sin entender. Clasificado por el modelo, esto salía
+    # "trámite" y se derivaba a una persona sin saber de qué se trataba.
+    if state.get("pide_algo_nuevo"):
+        return "opciones"
+
     # Sin ciudadano identificado no se pueden ejecutar tools sobre la DB.
     if state.get("ciudadano_id") is None:
         return "escalado"
@@ -244,6 +251,7 @@ def _estado_inicial(mensaje: str, canal: Canal, identificador: str) -> AgentStat
         "tipo_sin_definir": False,
         "caso_elegido": None,
         "origen_menu": None,
+        "pide_algo_nuevo": False,
         # `vueltas_sin_definir` y `ofertas` se omiten a propósito: lo que no
         # viene en el input conserva el valor del checkpoint. Es la única forma
         # de contar repreguntas y de recordar qué número era cada opción cuando
@@ -292,11 +300,19 @@ async def _abrir_caso(db: AsyncSession, final: AgentState) -> str | None:
         return None
 
     canal = Canal(final["canal"])
+    tipo = TIPO_POR_INTENCION.get(final.get("intencion") or "", TipoCaso.consulta)
     caso = Caso(
         ciudadano_id=uuid.UUID(ciudadano_id),
-        tipo=TIPO_POR_INTENCION.get(final.get("intencion") or "", TipoCaso.consulta),
+        tipo=tipo,
         canal_origen=canal,
         canal_actual=canal,
+        # Una consulta o un trámite no pasan por ninguna tool que los nombre: se
+        # titulan con lo que pidió. Reclamos y turnos se titulan al registrarse.
+        titulo=(
+            titulo_automatico(tipo, final.get("mensaje"))
+            if tipo in (TipoCaso.consulta, TipoCaso.tramite)
+            else None
+        ),
     )
     db.add(caso)
     await db.flush()
@@ -408,9 +424,15 @@ async def procesar_mensaje(
     canal: Canal,
     identificador: str,
     checkpointer: BaseCheckpointSaver | None = None,
+    ofertas: list[dict] | None = None,
 ) -> AgentState:
     """Entry point del orquestador: resuelve el thread, corre el grafo y
-    persiste interacciones + auditoría de la respuesta."""
+    persiste interacciones + auditoría de la respuesta.
+
+    `ofertas`: los casos que el saludo de una llamada le acaba de enumerar al
+    ciudadano. Por WhatsApp el menú sale del propio grafo y queda en el
+    checkpointer; el saludo de la llamada se arma afuera del grafo, así que el
+    canal de voz las pasa con el primer turno."""
     saver = checkpointer if checkpointer is not None else _checkpointer
     if saver is None:
         raise RuntimeError(
@@ -419,6 +441,8 @@ async def procesar_mensaje(
 
     thread_id = await _resolver_thread_id(db, canal, identificador)
     estado = _estado_inicial(mensaje, canal, identificador)
+    if ofertas:
+        estado["ofertas"] = ofertas
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
 
     grafo = construir_grafo(db, saver)

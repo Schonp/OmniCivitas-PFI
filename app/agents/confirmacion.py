@@ -52,8 +52,11 @@ def _reclamo(args: dict, salida: dict, voz: bool) -> str:
     referencia = salida.get("referencia", "")
     sobre = f" por {descripcion}" if descripcion else ""
     if voz:
+        # Sin el número de caso: "REC-0203E017" dicho en voz alta no se puede
+        # anotar ni recordar, y alarga la respuesta. Para consultar después
+        # alcanza con llamar desde el mismo número: el caso se busca por él.
         return (
-            f"Listo, registré su reclamo{sobre}, con el número de caso {referencia}. "
+            f"Listo, registré su reclamo{sobre}. "
             "Las novedades le van a llegar por WhatsApp a este mismo número."
         )
     return (
@@ -71,7 +74,7 @@ def _reserva(salida: dict, voz: bool) -> str:
     if voz:
         cuando = f" para el {fecha[0]} a {_hora_hablada(fecha[1])}" if fecha else ""
         donde = f", en {sede}" if sede else ""
-        return f"Listo, le reservé el turno de {turno}{cuando}{donde}. El número de caso es {referencia}."
+        return f"Listo, le reservé el turno de {turno}{cuando}{donde}."
     lineas = [f"Le reservé el turno de {turno}.", "", f"Turno: {turno}"]
     if fecha:
         lineas.append(f"Día y hora: {fecha[0]}, {fecha[1]} h")
@@ -160,7 +163,9 @@ def estado_de_casos(salida: dict, canal: Canal) -> str:
     if salida.get("varios_posibles"):
         casos = salida.get("casos") or []
         if voz:
-            lista = "; ".join(f"{c['referencia']}, por {_de_que_trata(c)}" for c in casos)
+            # Por voz se distinguen por de qué tratan, no por el número.
+            temas = [f"uno por {_de_que_trata(c)}" for c in casos]
+            lista = ", ".join(temas[:-1]) + " y " + temas[-1] if len(temas) > 1 else temas[0]
             return f"Tiene {len(casos)} casos a su nombre: {lista}. ¿Por cuál me consulta?"
         lineas = [f"- {c['referencia']}: {_de_que_trata(c)}" for c in casos]
         return "Encontré estos casos a su nombre:\n" + "\n".join(lineas) + "\n\n¿Por cuál me consulta?"
@@ -169,7 +174,7 @@ def estado_de_casos(salida: dict, canal: Canal) -> str:
     estado = ESTADO_EN_PALABRAS.get(salida.get("estado", ""), "está registrado")
     referencia = salida.get("referencia", "")
     if voz:
-        return f"{tipo}{sobre} {estado}. El número de caso es {referencia}."
+        return f"{tipo}{sobre} {estado}."
     return f"{tipo}{sobre} {estado}.\n\nNúmero de caso: {referencia}"
 
 
@@ -299,10 +304,32 @@ def recordatorio_de_turno(reserva: Reserva) -> str:
     )
 
 
-def pedido_de_dia_y_hora(agenda: Turno | None, canal: Canal) -> str:
-    """Cuando quiere un turno pero todavía no dijo para qué día."""
+def pedido_de_dia_y_hora(
+    agenda: Turno | None, canal: Canal, libres: list[datetime] | None = None
+) -> str:
+    """Cuando quiere un turno pero todavía no dijo para qué día.
+
+    Con `libres`, se le ofrecen horarios concretos que hoy están libres en la
+    agenda, en vez de mandarlo a adivinar uno que quizás ya está tomado. Elige
+    uno o dice otro: en los dos casos la reserva pasa por `reservar`, que
+    vuelve a controlar el cupo con la agenda bloqueada."""
     if agenda is None:
         return "¿Para qué trámite es el turno, y qué día y a qué hora le queda bien?"
+    if libres:
+        opciones = [momento_en_palabras(momento) for momento in libres]
+        if canal == Canal.voz:
+            # "a las 9" y no "a las 9:00": dicho en voz alta, el ":00" sobra.
+            habladas = [opcion.removesuffix(":00") for opcion in opciones]
+            lista = ", el ".join(habladas[:-1]) + (" o el " if len(habladas) > 1 else "") + habladas[-1]
+            return (
+                f"Para {agenda.nombre} tengo libre el {lista}. "
+                "¿Le queda bien alguno? Si prefiere otro día, dígamelo."
+            )
+        return (
+            f"Estos son los próximos horarios libres de {agenda.nombre}:\n"
+            + "\n".join(f"- {opcion}" for opcion in opciones)
+            + "\n\n¿Le queda bien alguno? Si prefiere otro día u horario, dígame cuál."
+        )
     return (
         f"¿Qué día y a qué hora le queda bien? Los turnos de {agenda.nombre} son "
         f"{horario_de_atencion(agenda)}."

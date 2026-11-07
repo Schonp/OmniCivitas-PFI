@@ -32,9 +32,24 @@ AVISO_IA = (
 AVISO_DATOS = (
     "Para gestionar su pedido el organismo guarda su número de teléfono o su correo, "
     "su nombre y DNI si los informa, y lo que cuente en esta conversación. Se usan solo "
-    "para atenderlo. Puede pedir consultar, corregir o dar de baja sus datos cuando quiera, "
+    "para atenderlo. Puede pedir consultar, corregir o eliminar sus datos cuando quiera, "
     "por este mismo medio."
 )
+
+# Lo mismo que AVISO_DATOS, dicho en una llamada: qué se guarda, para qué y qué
+# derechos tiene, en una sola oración. Escuchado, el texto escrito dura medio
+# minuto y el ciudadano se pierde antes de llegar a contar lo que necesita.
+AVISO_DATOS_VOZ = (
+    "Para atenderlo, el organismo guarda su teléfono, su nombre y DNI si los da, "
+    "y esta conversación; puede consultarlos, corregirlos o pedir que se eliminen cuando quiera."
+)
+# En las llamadas siguientes no se repite el aviso entero, pero el derecho a
+# pedir que se borren sus datos se le recuerda siempre al empezar.
+#
+# Se dice "eliminar" y no "dar de baja": "dar de baja" es también como se pide
+# cancelar un turno (`cancelacion.py`), y el ciudadano que repitiera la frase
+# para pedir el borrado terminaría cancelando una reserva.
+RECORDATORIO_DATOS_VOZ = "Si quiere, puede pedir que se eliminen sus datos."
 
 
 async def ya_se_le_aviso(
@@ -77,6 +92,13 @@ async def anteponer_aviso(
 ) -> str:
     """Devuelve el texto con el aviso adelante si corresponde avisarle ahora."""
     if not texto.strip():
+        return texto
+    # Por voz, los avisos van en el saludo con el que arranca cada llamada
+    # (`voz.saludo_inicial`). Ese saludo no queda registrado como interacción,
+    # así que sin esta salida `ya_se_le_aviso` no lo ve y el primer turno
+    # repetía el aviso de IA y le sumaba el de datos: la llamada empezaba con
+    # casi un minuto de avisos en dos tandas.
+    if canal == Canal.voz:
         return texto
     if await ya_se_le_aviso(db, ciudadano_id, canal):
         return texto

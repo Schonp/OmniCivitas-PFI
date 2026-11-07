@@ -120,3 +120,39 @@ async def test_un_tema_nuevo_no_se_pega_al_caso_abierto(db_session, mocker, ciud
     assert continuacion["caso_id"] == str(abierto.id)
     assert tema_nuevo["caso_id"] is None
     assert tema_nuevo["historial"] == []
+
+
+import pytest  # noqa: E402
+
+from app.agents.intake import pide_tema_nuevo  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "mensaje",
+    ["Quiero reportar algo nuevo.", "Es otra cosa", "Tengo otro reclamo", "Quiero hacer un nuevo reclamo"],
+)
+def test_reconoce_cuando_el_ciudadano_dice_que_es_otro_tema(mensaje):
+    assert pide_tema_nuevo(mensaje)
+
+
+@pytest.mark.parametrize(
+    "mensaje",
+    ["¿Cómo sigue mi reclamo?", "Hay un pozo nuevo en la esquina", "Sí, ese", "Quiero saber algo"],
+)
+def test_no_confunde_una_continuacion_con_un_tema_nuevo(mensaje):
+    assert not pide_tema_nuevo(mensaje)
+
+
+async def test_algo_nuevo_no_sigue_el_caso_abierto_aunque_el_modelo_diga_que_si(mocker, db_session):
+    """Pasó por voz: "Quiero reportar algo nuevo" quedó pegado al reclamo
+    anterior y el reclamo nuevo se registró en el caso viejo."""
+    _mock_intake(
+        mocker,
+        ClasificacionIntent(
+            intencion="reclamo", entidades={}, confianza=0.9, continua_caso_abierto=True
+        ),
+    )
+
+    resultado = await nodo_intake(_estado("Quiero reportar algo nuevo."), db_session)
+
+    assert resultado["continua_caso_abierto"] is False

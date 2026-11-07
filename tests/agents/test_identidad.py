@@ -14,6 +14,8 @@ from app.agents.identidad import extraer_identidad, responde_con_su_identidad, s
         # Por voz, el reconocimiento lo transcribe con guiones o espacios.
         ("Me llamo Laura Prueba y mi documento es 30-885-211.", ("Laura Prueba", "30885211")),
         ("Laura Prueba, 30 885 211", ("Laura Prueba", "30885211")),
+        # ...y Whisper large-v3-turbo, con comas a la inglesa.
+        ("Mi nombre es Pedro Prueba y mi DNI es 30,123,456.", ("Pedro Prueba", "30123456")),
         # Solo el número: no hay nombre que leer.
         ("30111292", (None, "30111292")),
         # Cuenta otra cosa además: no se adivina qué parte es el nombre.

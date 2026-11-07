@@ -23,7 +23,8 @@ def test_el_reclamo_se_confirma_con_la_referencia_real():
 def test_por_voz_el_seguimiento_se_avisa_por_whatsapp_y_sin_etiquetas():
     texto = confirmacion(*RECLAMO[0].values(), RECLAMO[1], Canal.voz)
 
-    assert "REC-1A2B3C4D" in texto
+    # Por llamada no se dicta el número de caso.
+    assert "REC-1A2B3C4D" not in texto
     assert "WhatsApp" in texto
     assert "\n" not in texto
 
@@ -40,6 +41,7 @@ def test_por_voz_la_hora_en_punto_se_dice_sin_los_minutos():
     texto = confirmacion(*RESERVA[0].values(), RESERVA[1], Canal.voz)
 
     assert "para el martes 1 de diciembre a las 12." in texto
+    assert "RES-9F8E7D6C" not in texto
 
 
 def test_las_consultas_no_tienen_confirmacion_fija():

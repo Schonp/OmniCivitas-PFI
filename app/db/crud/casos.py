@@ -337,6 +337,23 @@ async def asignar_caso(
     return caso
 
 
+async def cambiar_titulo_caso(db: AsyncSession, caso: Caso, titulo: str, *, actor: str) -> Caso:
+    """El supervisor corrige cómo se le nombra el caso al ciudadano."""
+    anterior = caso.titulo
+    caso.titulo = " ".join(titulo.split())
+    await registrar_auditoria(
+        db,
+        caso_id=caso.id,
+        accion="cambio_titulo",
+        actor=actor,
+        actor_tipo=ActorInteraccion.operador,
+        metadata={"titulo_anterior": anterior, "titulo_nuevo": caso.titulo},
+    )
+    await db.commit()
+    await _refrescar_para_panel(db, caso)
+    return caso
+
+
 async def actualizar_resumen_caso(
     db: AsyncSession, caso: Caso, resumen: str, *, actor: str
 ) -> Caso:

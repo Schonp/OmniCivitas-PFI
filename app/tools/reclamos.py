@@ -12,6 +12,18 @@ from app.tools import ACTOR_AGENTE
 CategoriaReclamo = Literal["servicio", "infraestructura", "tramite"]
 
 
+TITULO_MAX = 120
+
+
+def titulo_de_reclamo(descripcion: str) -> str:
+    """"Pozo en la calzada en Guatemala 4100": de qué se trata, sin repetir que
+    es un reclamo (el tipo ya figura aparte en el panel y en el saludo)."""
+    texto = " ".join(descripcion.split())
+    if texto:
+        texto = texto[0].upper() + texto[1:]
+    return texto[:TITULO_MAX]
+
+
 async def crear_reclamo(
     db: AsyncSession,
     *,
@@ -46,6 +58,9 @@ async def crear_reclamo(
     # asunto (el del correo, que escribió el propio ciudadano), se respeta.
     if not caso.asunto:
         caso.asunto = descripcion.strip()[:300]
+    # El título no pisa uno que haya puesto el supervisor.
+    if not caso.titulo:
+        caso.titulo = titulo_de_reclamo(descripcion)
 
     await registrar_auditoria(
         db,

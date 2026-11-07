@@ -14,6 +14,7 @@ from app.db.crud.casos import (
     actualizar_resumen_caso,
     asignar_caso,
     cambiar_estado_caso,
+    cambiar_titulo_caso,
     contar_casos,
     contar_casos_por_estado,
     crear_caso,
@@ -39,6 +40,7 @@ from app.schemas.caso import (
     CasoCreate,
     CasoEstadoUpdate,
     CasoOut,
+    CasoTituloUpdate,
     ConteoCasosOut,
     RespuestaOperadorCreate,
 )
@@ -274,6 +276,21 @@ async def asignar(
             )
 
     return await asignar_caso(db, caso, operador, actor=usuario_actual.email)
+
+
+@router.patch("/{caso_id}/titulo", response_model=CasoOut)
+async def cambiar_titulo(
+    caso_id: uuid.UUID,
+    datos: CasoTituloUpdate,
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(solo_supervisor),
+) -> CasoOut:
+    """Solo el supervisor: el título es lo que escucha o lee el ciudadano cuando
+    se le ofrece retomar el caso."""
+    caso = await obtener_caso_por_id(db, caso_id)
+    if caso is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Caso no encontrado")
+    return await cambiar_titulo_caso(db, caso, datos.titulo, actor=usuario_actual.email)
 
 
 @router.post("/{caso_id}/resumen", response_model=CasoOut)

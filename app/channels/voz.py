@@ -35,6 +35,7 @@ import audioop
 import base64
 import io
 import logging
+import re
 import wave
 from collections.abc import AsyncIterator
 from xml.sax.saxutils import escape
@@ -44,9 +45,10 @@ from fastapi import WebSocket
 from sqlalchemy.ext.asyncio import AsyncSession
 from twilio.request_validator import RequestValidator
 
-from app.agents.eleccion import armar_ofertas
+from app.agents.aviso_ia import es_primer_contacto
+from app.agents.eleccion import armar_ofertas, armar_ofertas_voz
 from app.agents.graph import procesar_mensaje
-from app.agents.saludo import armar_saludo
+from app.agents.saludo import MAX_CASOS_VOZ, armar_saludo
 from app.agents.state import AgentState
 from app.channels.whatsapp import normalizar_telefono
 from app.core.config import settings
@@ -74,7 +76,11 @@ ANCHO_MUESTRA_PCM = 2  # 16 bits
 # chunk cada 20ms (160 bytes mulaw = 160 muestras). Afinados a ojo para una
 # demo, no medidos contra audio real todavía -- ver DEVLOG.md.
 UMBRAL_ENERGIA_VOZ = 300  # RMS de PCM 16-bit por debajo de esto cuenta como silencio
-CHUNKS_SILENCIO_FIN_TURNO = 25  # ~500ms de silencio sostenido = el ciudadano terminó
+# ~1,2 s de silencio sostenido = el ciudadano terminó. Con 500 ms, y todavía
+# con 800 ms, una pausa breve a mitad de frase ("es un reclamo... hay un auto
+# mal estacionado") cortaba el turno: el agente contestaba medio mensaje y lo
+# que el ciudadano seguía diciendo se perdía mientras se procesaba.
+CHUNKS_SILENCIO_FIN_TURNO = 60
 CHUNKS_MINIMOS_HABLA = 10  # ~200ms de habla mínima antes de considerar que hubo un turno
 
 
@@ -144,7 +150,9 @@ async def identificar_ciudadano(db: AsyncSession, telefono: str) -> Ciudadano:
     )
 
 
-async def recibir_turno(db: AsyncSession, *, telefono: str, mensaje: str) -> AgentState:
+async def recibir_turno(
+    db: AsyncSession, *, telefono: str, mensaje: str, ofertas: list[dict] | None = None
+) -> AgentState:
     """Punto de entrada del canal para un turno ya transcripto: asegura el
     ciudadano y corre el grafo. Equivalente a `whatsapp.recibir_mensaje`, pero
     un turno de voz ya llega transcripto por `transcribir()`, no como texto
@@ -152,10 +160,18 @@ async def recibir_turno(db: AsyncSession, *, telefono: str, mensaje: str) -> Age
     numero = normalizar_telefono(telefono)
     await identificar_ciudadano(db, numero)
     logger.debug("canal voz: turno entrante")
-    return await procesar_mensaje(db, mensaje=mensaje, canal=CANAL, identificador=numero)
+    return await procesar_mensaje(
+        db, mensaje=mensaje, canal=CANAL, identificador=numero, ofertas=ofertas
+    )
 
 
 async def saludo_inicial(db: AsyncSession, telefono: str) -> str:
+    """Solo el texto del saludo (ver `saludo_inicial_con_ofertas`)."""
+    texto, _ofertas = await saludo_inicial_con_ofertas(db, telefono)
+    return texto
+
+
+async def saludo_inicial_con_ofertas(db: AsyncSession, telefono: str) -> tuple[str, list[dict]]:
     """El saludo con el que arranca la llamada, antes de que el ciudadano diga
     una palabra.
 
@@ -170,10 +186,110 @@ async def saludo_inicial(db: AsyncSession, telefono: str) -> str:
     casos_en_curso = await listar_casos_activos_de_ciudadano(db, ciudadano.id)
     primeros = await primeros_mensajes_de_casos(db, [caso.id for caso in casos_en_curso])
     ofertas = armar_ofertas(casos_en_curso)
-    return armar_saludo(casos_en_curso, primeros, ofertas, canal=Canal.voz)
+    primer_contacto = await es_primer_contacto(db, ciudadano.id)
+    texto = armar_saludo(
+        casos_en_curso, primeros, ofertas, canal=Canal.voz, primer_contacto=primer_contacto
+    )
+    # Lo que se nombró, en el orden en que se nombró: la respuesta ("el dos")
+    # se resuelve contra esto en el primer turno.
+    return texto, armar_ofertas_voz(casos_en_curso[:MAX_CASOS_VOZ])
 
 
 # --- ASR / TTS (servicio propio, ver voz_asr_tts/) ---------------------------
+
+
+# --- DNI dictado -------------------------------------------------------------
+
+_DIGITOS_EN_PALABRAS = {
+    "cero": "0", "uno": "1", "dos": "2", "tres": "3", "cuatro": "4",
+    "cinco": "5", "seis": "6", "siete": "7", "ocho": "8", "nueve": "9",
+}
+_PALABRA_DIGITO = "(?:" + "|".join(_DIGITOS_EN_PALABRAS) + ")"
+_SEPARADOR_DICTADO = r"[\s,.\-]+"
+# Tres o más dígitos dichos uno por uno y que quedaron en palabras.
+_CORRIDA_DE_PALABRAS = re.compile(
+    rf"\b{_PALABRA_DIGITO}(?:{_SEPARADOR_DICTADO}{_PALABRA_DIGITO}){{2,}}\b", re.IGNORECASE
+)
+# Grupos de números separados solo por espacios, puntos, comas o guiones.
+_CORRIDA_DE_NUMEROS = re.compile(rf"(?<!\d)\d{{1,4}}(?:{_SEPARADOR_DICTADO}\d{{1,4}})+(?!\d)")
+LARGOS_DE_DNI = (7, 8)
+
+
+def unir_dni_dictado(texto: str) -> str:
+    """Junta un DNI dictado de a dígitos o de a pares en un solo número.
+
+    Whisper casi siempre pasa los dígitos dictados a números, pero agrupados a
+    su manera según las pausas: "cuatro, tres, cuatro, cero, tres, dos, cuatro,
+    dos" llega como "3012-3456", y de a pares también. Sin unirlos, la regla
+    que lee el DNI (`agents/identidad.py`) no lo encuentra y el agente lo
+    vuelve a pedir. Solo se unen los grupos que suman 7 u 8 dígitos, el largo
+    de un DNI: una dirección ("Guatemala 4100"), un horario o un teléfono
+    completo quedan como estaban.
+    """
+
+    def palabras_a_digitos(coincidencia: re.Match) -> str:
+        palabras = re.split(_SEPARADOR_DICTADO, coincidencia.group(0).strip())
+        return "".join(_DIGITOS_EN_PALABRAS[palabra.lower()] for palabra in palabras)
+
+    def unir(coincidencia: re.Match) -> str:
+        digitos = re.sub(r"\D", "", coincidencia.group(0))
+        return digitos if len(digitos) in LARGOS_DE_DNI else coincidencia.group(0)
+
+    texto = _CORRIDA_DE_PALABRAS.sub(palabras_a_digitos, texto)
+    return _CORRIDA_DE_NUMEROS.sub(unir, texto)
+
+
+# --- Apellido deletreado ------------------------------------------------------
+
+_LETRA = r"[A-ZÑ]"
+_NO_LETRA_ANTES = r"(?<![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])"
+_NO_LETRA_DESPUES = r"(?![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])"
+# Whisper transcribe un deletreo ("ese, ce, hache, o, ene") como letras
+# sueltas en mayúscula: "S-C-H-O-N". Tres o más, para no confundir una "Y" o una
+# "A" sueltas con un deletreo.
+_DELETREO = rf"{_NO_LETRA_ANTES}{_LETRA}(?:[\s,.\-]+{_LETRA}){{2,}}{_NO_LETRA_DESPUES}"
+# "Pedro Schón, se escribe S-C-H-O-N": lo deletreado corrige lo que se entendió.
+_PALABRA_Y_SU_DELETREO = re.compile(
+    rf"[A-ZÁÉÍÓÚÑ][a-záéíóúüñ]+,?\s+(?:que\s+)?se\s+(?:escribe|deletrea)\s+({_DELETREO})"
+)
+# "Pedro, S-C-H-O-N": el deletreo ocupa el lugar del apellido.
+_DELETREO_SUELTO = re.compile(rf",?\s*({_DELETREO})")
+# Siglas que alguien podría deletrear: se escriben juntas, en mayúscula, y no
+# se toman como apellido.
+_SIGLAS = {"DNI", "CUIT", "CUIL", "ABL", "SUBE", "VTV", "AFIP", "ARBA", "ANSES", "ARCA"}
+
+
+def unir_apellido_deletreado(texto: str) -> str:
+    """Convierte un apellido deletreado letra por letra en la palabra escrita.
+
+    Un apellido poco común casi nunca se transcribe bien de oído, y deletrearlo
+    es lo que cualquiera hace por teléfono. La regla que lee el nombre
+    (`agents/identidad.py`) espera palabras con mayúscula inicial, así que sin
+    esto el apellido deletreado se perdía y el caso quedaba solo con el nombre.
+    """
+
+    def letras(deletreo: str) -> str:
+        return re.sub(r"[^A-ZÑ]", "", deletreo)
+
+    def reemplazar_palabra(coincidencia: re.Match) -> str:
+        if letras(coincidencia.group(1)) in _SIGLAS:
+            return coincidencia.group(0)
+        return letras(coincidencia.group(1)).capitalize()
+
+    def reemplazar_suelto(coincidencia: re.Match) -> str:
+        palabra = letras(coincidencia.group(1))
+        if palabra in _SIGLAS:
+            # La coma y el espacio de adelante quedan como estaban.
+            return coincidencia.group(0).replace(coincidencia.group(1), palabra)
+        return f" {palabra.capitalize()}"
+
+    texto = _PALABRA_Y_SU_DELETREO.sub(reemplazar_palabra, texto)
+    return _DELETREO_SUELTO.sub(reemplazar_suelto, texto).strip()
+
+
+def normalizar_dictado(texto: str) -> str:
+    """Lo que el ciudadano dictó de a partes (DNI, apellido), escrito entero."""
+    return unir_apellido_deletreado(unir_dni_dictado(texto))
 
 
 async def transcribir(audio_wav: bytes) -> str:
@@ -186,7 +302,7 @@ async def transcribir(audio_wav: bytes) -> str:
             files={"audio": ("audio.wav", audio_wav, "audio/wav")},
         )
         respuesta.raise_for_status()
-        return respuesta.json()["texto"]
+        return normalizar_dictado(respuesta.json()["texto"])
 
 
 async def sintetizar_streaming(texto: str) -> AsyncIterator[bytes]:

@@ -1,4 +1,5 @@
 import logging
+import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -6,7 +7,7 @@ from app.agents import llm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.contexto import obtener_ciudadano_por_canal
-from app.agents.eleccion import ETIQUETA_TIPO, resolver
+from app.agents.eleccion import ETIQUETA_TIPO, resolver, resolver_voz
 from app.agents.escalado import RESPUESTA_ESCALADO
 from app.agents.state import AgentState
 from app.db.crud.casos import obtener_caso_activo_de_ciudadano
@@ -71,6 +72,43 @@ async def _historial_del_caso(state: AgentState, db: AsyncSession) -> list[dict]
     ]
 
 
+# El ciudadano dice explícitamente que es otro tema. Por voz el saludo le
+# pregunta "¿quiere seguir con ese o es algo nuevo?", y el clasificador llegó a
+# tomar "Quiero reportar algo nuevo" como continuación del reclamo anterior: el
+# reclamo nuevo quedó registrado en el caso viejo, mezclado con otro tema.
+_PIDE_TEMA_NUEVO = re.compile(
+    r"\b(?:algo|otro|otra)\s+(?:nuevo|nueva|distinto|distinta|diferente)\b"
+    r"|\botra\s+cosa\b"
+    r"|\botro\s+(?:tema|reclamo|pedido|problema|asunto|turno|tr[aá]mite)\b"
+    r"|\b(?:un|una)\s+(?:nuevo|nueva)\s+(?:reclamo|consulta|pedido|tr[aá]mite|turno)\b"
+    r"|\bnuev[oa]\s+(?:reclamo|consulta|pedido|tr[aá]mite|turno)\b",
+    re.IGNORECASE,
+)
+
+
+def pide_tema_nuevo(mensaje: str) -> bool:
+    return bool(_PIDE_TEMA_NUEVO.search(mensaje or ""))
+
+
+# El mensaje entero es "quiero algo nuevo", sin decir qué. No hay nada que
+# clasificar: el modelo lo tomaba como "trámite" y lo derivaba a una persona.
+_SOLO_ALGO_NUEVO = re.compile(
+    r"^(?:(?:hola|buenas|buen día|buen dia|sí|si|no|bueno|eh)[,.]?\s+)*"
+    r"(?:(?:es|sería|seria)\s+)?"
+    r"(?:(?:quiero|quisiera|necesito|me gustaría|me gustaria|vengo a|voy a)\s+)?"
+    r"(?:(?:hacer|iniciar|empezar|arrancar|pedir|plantear|consultar|reportar)\s+)?"
+    r"(?:algo\s+(?:nuevo|distinto|diferente)|otra\s+cosa|otro\s+tema|otro\s+pedido"
+    r"|otra\s+gesti[oó]n|una\s+nueva\s+gesti[oó]n|una\s+gesti[oó]n\s+nueva|una\s+gesti[oó]n"
+    r"|un\s+nuevo\s+pedido|un\s+pedido\s+nuevo|uno\s+nuevo|nuevo|nueva)"
+    r"[.!¡¿?\s]*$",
+    re.IGNORECASE,
+)
+
+
+def pide_algo_nuevo_sin_decir_que(mensaje: str) -> bool:
+    return bool(_SOLO_ALGO_NUEVO.match((mensaje or "").strip()))
+
+
 def _desde_la_eleccion(oferta: dict) -> dict:
     """El ciudadano eligió del menú: no hay nada que clasificar."""
     if "caso_id" in oferta:
@@ -103,10 +141,28 @@ async def nodo_intake(state: AgentState, db: AsyncSession) -> dict:
     # Un "4" pelado no se le pregunta al modelo: se resuelve contra lo que se
     # ofreció. Las ofertas se consumen para que un número suelto de mañana no
     # caiga en la lista de hoy.
-    oferta = resolver(state["mensaje"], state.get("ofertas") or [])
+    por_voz = state.get("canal") == "voz"
+    ofertas = state.get("ofertas") or []
+    oferta = (resolver_voz if por_voz else resolver)(state["mensaje"], ofertas)
     if oferta is not None:
         logger.debug("intake: el ciudadano eligió la opción %s", oferta["numero"])
         return _desde_la_eleccion(oferta)
+
+    if pide_algo_nuevo_sin_decir_que(state["mensaje"]):
+        return {
+            "pide_algo_nuevo": True,
+            "intencion": "otro",
+            "entidades": {},
+            "confianza": 0.0,
+            "continua_caso_abierto": False,
+            "requiere_escalado": False,
+            "motivo_escalado": None,
+            "ofertas": [],
+        }
+
+    # Por voz el saludo acaba de ofrecerle sus casos abiertos y no eligió
+    # ninguno: lo que cuenta es algo nuevo, no la continuación del último.
+    nuevo_tras_ofrecer = por_voz and bool(ofertas)
 
     historial = state.get("historial") or await _historial_del_caso(state, db)
     clasificador = llm.get_llm_intake().with_structured_output(ClasificacionIntent)
@@ -125,11 +181,18 @@ async def nodo_intake(state: AgentState, db: AsyncSession) -> dict:
         resultado.confianza,
         resultado.requiere_humano,
     )
-    return {
-        "continua_caso_abierto": resultado.continua_caso_abierto,
+    salida = {
+        "continua_caso_abierto": resultado.continua_caso_abierto
+        and not pide_tema_nuevo(state["mensaje"])
+        and not nuevo_tras_ofrecer,
         "intencion": resultado.intencion,
         "entidades": resultado.entidades,
         "confianza": resultado.confianza,
         "requiere_escalado": resultado.requiere_humano,
         "motivo_escalado": "solicita_humano" if resultado.requiere_humano else None,
     }
+    if por_voz:
+        # Las ofertas de la llamada valen para la respuesta al saludo, no para
+        # los turnos que siguen.
+        salida["ofertas"] = []
+    return salida

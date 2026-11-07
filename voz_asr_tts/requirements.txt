@@ -8,3 +8,7 @@ numpy==2.5.4
 # (metadata_errors en av.open) -- ver SYSTRAN/faster-whisper#1589. Pineado
 # a la última versión confirmada como funcional.
 av==18.1.0
+# DLLs de CUDA para correr Whisper en la GPU (servidor.py las registra al
+# arrancar). Sin ellas el servicio igual anda, con Whisper "small" en CPU.
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.28.1.4

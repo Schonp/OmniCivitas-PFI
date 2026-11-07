@@ -218,6 +218,7 @@ export function ListaCasos() {
           <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-600">
             <tr>
               <th className="px-4 py-2.5 font-semibold">Caso</th>
+              <th className="px-4 py-2.5 font-semibold">Título</th>
               <th className="px-4 py-2.5 font-semibold">Ciudadano</th>
               <th className="px-4 py-2.5 font-semibold">Tipo</th>
               <th className="px-4 py-2.5 font-semibold">Estado</th>
@@ -231,7 +232,7 @@ export function ListaCasos() {
             {cargando &&
               [0, 1, 2, 3].map((fila) => (
                 <tr key={fila}>
-                  <td colSpan={esSupervisor ? 8 : 7} className="px-4 py-3">
+                  <td colSpan={esSupervisor ? 9 : 8} className="px-4 py-3">
                     <div className="h-5 animate-pulse rounded bg-slate-100" />
                   </td>
                 </tr>
@@ -246,6 +247,15 @@ export function ListaCasos() {
                 >
                   <td className="px-4 py-2.5 font-mono text-xs text-slate-500">
                     {idCorto(caso.id)}
+                  </td>
+                  <td className="min-w-64 max-w-md px-4 py-2.5">
+                    {caso.titulo ? (
+                      <span className="block truncate text-slate-800" title={caso.titulo}>
+                        {caso.titulo}
+                      </span>
+                    ) : (
+                      <span className="italic text-slate-400">Sin título</span>
+                    )}
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="font-medium text-slate-900">{caso.ciudadano.nombre}</div>
@@ -283,7 +293,7 @@ export function ListaCasos() {
 
             {!cargando && casos.length === 0 && (
               <tr>
-                <td colSpan={esSupervisor ? 8 : 7} className="px-4 py-12 text-center">
+                <td colSpan={esSupervisor ? 9 : 8} className="px-4 py-12 text-center">
                   {solapa === "archivados" ? (
                     <>
                       <Archive size={28} className="mx-auto mb-2 text-slate-300" aria-hidden />

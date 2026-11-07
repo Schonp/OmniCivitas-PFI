@@ -12,8 +12,9 @@ import re
 # Un DNI argentino: 7 u 8 dígitos, juntos o separados en grupos ("30.111.291",
 # "30111291"). Por voz, el reconocimiento lo transcribe también con guiones o
 # espacios ("30-885-211"): pasó en la primera llamada de prueba, y sin esto el
-# DNI dictado no se registraba y el agente lo volvía a pedir.
-DNI = re.compile(r"\b\d{1,2}[.\- ]?\d{3}[.\- ]?\d{3}\b")
+# DNI dictado no se registraba y el agente lo volvía a pedir. Whisper
+# large-v3-turbo lo escribe además con comas, a la inglesa ("30,123,456").
+DNI = re.compile(r"\b\d{1,2}[.,\- ]?\d{3}[.,\- ]?\d{3}\b")
 
 # La presentación no distingue mayúsculas; el nombre sí: arranca con mayúscula,
 # lo que evita llevarse la palabra siguiente ("soy Juan Pérez, DNI ...").

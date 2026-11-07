@@ -12,7 +12,7 @@ from app.db.crud.turnos import (
     obtener_turno_por_nombre,
     reservar,
 )
-from app.db.models import ActorInteraccion, Canal, Caso, TipoCaso
+from app.db.models import ActorInteraccion, Canal, Caso, EstadoCaso, TipoCaso
 from app.tools import ACTOR_AGENTE
 
 FORMATO_FECHA_HORA = "%Y-%m-%d %H:%M"
@@ -72,6 +72,9 @@ async def crear_reserva(
         reserva = await reservar(
             db, agenda_id=agenda.id, ciudadano_id=ciudadano_id, caso_id=caso.id, momento=momento
         )
+        # El título no pisa uno que haya puesto el supervisor.
+        if not caso.titulo:
+            caso.titulo = agenda.nombre[:120]
 
     await registrar_auditoria(
         db,
@@ -81,6 +84,26 @@ async def crear_reserva(
         actor_tipo=ActorInteraccion.agente_ia,
         metadata={"turno": agenda.nombre, "fecha_hora": fecha_hora},
     )
+    # Con el turno reservado, el pedido quedó resuelto: el caso se cierra y deja
+    # de aparecer entre los casos en curso (en el panel y en el saludo de la
+    # llamada). El turno en sí sigue vivo en la agenda; cancelarlo o cambiarlo
+    # opera sobre la reserva, no sobre el caso.
+    if caso.estado != EstadoCaso.cerrado:
+        estado_anterior = caso.estado
+        caso.estado = EstadoCaso.cerrado
+        caso.motivo_cierre = "resuelto"
+        await registrar_auditoria(
+            db,
+            caso_id=caso.id,
+            accion="cambio_estado",
+            actor=ACTOR_AGENTE,
+            actor_tipo=ActorInteraccion.agente_ia,
+            metadata={
+                "estado_anterior": estado_anterior.value,
+                "estado_nuevo": EstadoCaso.cerrado.value,
+                "motivo": "resuelto",
+            },
+        )
     await db.commit()
     await db.refresh(caso)
 

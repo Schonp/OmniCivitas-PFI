@@ -31,7 +31,12 @@ from app.agents.eleccion import ETIQUETA_TIPO
 from app.agents.identidad import DNI, extraer_identidad, sin_nombre_inventado
 from app.agents.seguridad import ofrece_dato_sensible, respuesta_dato_sensible
 from app.db.crud import ciudadanos
-from app.db.crud.turnos import ReservaNoDisponible, ahora_local, listar_agendas
+from app.db.crud.turnos import (
+    ReservaNoDisponible,
+    ahora_local,
+    listar_agendas,
+    proximos_horarios_libres,
+)
 from app.db.models import Turno
 from app.tools import consultas, reclamos, reservas
 from app.tools.reclamos import CategoriaReclamo
@@ -911,10 +916,13 @@ async def _resolver(
                 if not dijo_un_dia(dichos):
                     # Nunca dijo un día: la fecha la inventó el modelo. Se le
                     # pregunta, con la grilla de la agenda a la vista.
+                    libres = (
+                        await proximos_horarios_libres(db, nombrada) if nombrada is not None else []
+                    )
                     return {
                         "resultado_ejecucion": resultado_ejecucion or None,
                         "caso_id": caso_id,
-                        "respuesta": pedido_de_dia_y_hora(nombrada, Canal(state["canal"])),
+                        "respuesta": pedido_de_dia_y_hora(nombrada, Canal(state["canal"]), libres),
                     }
             if tool_call["name"] == "crear_reclamo":
                 inventados = datos_inventados(tool_call["args"].get("descripcion") or "", dichos)

@@ -181,6 +181,38 @@ async def disponibilidad(
     return horarios
 
 
+async def proximos_horarios_libres(
+    db: AsyncSession,
+    agenda: Turno,
+    ahora: datetime | None = None,
+    cantidad: int = ALTERNATIVAS,
+) -> list[datetime]:
+    """Los primeros horarios libres para ofrecer cuando el vecino pide un turno
+    sin decir el día: el primero libre de cada día, en días distintos, para que
+    tenga opciones reales para elegir y no tres horarios seguidos de la misma
+    mañana. Si no alcanzan los días, se completa con los que siguen."""
+    ahora = ahora or ahora_local()
+    libres = [
+        horario["fecha_hora"]
+        for horario in await disponibilidad(db, agenda, ahora.date(), DIAS_DE_BUSQUEDA * 2, ahora)
+        if horario["reservable"] and horario["ocupados"] < horario["cupos"]
+    ]
+    elegidos: list[datetime] = []
+    dias_usados: set[date] = set()
+    for momento in libres:
+        if momento.astimezone(ZONA_HORARIA).date() not in dias_usados:
+            elegidos.append(momento)
+            dias_usados.add(momento.astimezone(ZONA_HORARIA).date())
+        if len(elegidos) == cantidad:
+            break
+    for momento in libres:
+        if len(elegidos) == cantidad:
+            break
+        if momento not in elegidos:
+            elegidos.append(momento)
+    return sorted(elegidos)
+
+
 async def horarios_libres_cercanos(
     db: AsyncSession,
     agenda: Turno,
