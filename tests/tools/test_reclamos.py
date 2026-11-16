@@ -33,6 +33,22 @@ async def test_crear_reclamo_ciudadano_existente(db_session, ciudadano):
     assert any(a.accion == "creacion_reclamo" for a in auditorias)
 
 
+async def test_crear_reclamo_guarda_la_descripcion_con_tildes(db_session, ciudadano):
+    """La descripción sale de las palabras del vecino y se le repite en la
+    confirmación: "arbol caido" no puede volver así escrito del organismo."""
+    resultado = await crear_reclamo(
+        db_session,
+        ciudadano_id=ciudadano.id,
+        canal=Canal.whatsapp,
+        descripcion="arbol caido en la calle Lima 717",
+        categoria="infraestructura",
+    )
+
+    caso = await db_session.get(Caso, uuid.UUID(resultado["caso_id"]))
+    assert caso.asunto == "árbol caído en la calle Lima 717"
+    assert caso.titulo == "Árbol caído en la calle Lima 717"
+
+
 async def test_crear_reclamo_ciudadano_inexistente(db_session):
     with pytest.raises(ToolException):
         await crear_reclamo(

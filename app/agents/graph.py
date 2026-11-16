@@ -20,6 +20,7 @@ from app.agents.intake import nodo_intake
 from app.agents.opciones import nodo_opciones
 from app.agents.saludo import nodo_saludo
 from app.agents.seguridad import con_aviso_de_seguridad, ofrece_dato_sensible
+from app.core.ortografia import con_tildes
 from app.agents.state import AgentState
 from app.agents.titulos import titulo_automatico
 from app.core.config import settings
@@ -331,7 +332,9 @@ async def _abrir_caso(db: AsyncSession, final: AgentState) -> str | None:
 async def _persistir_resultado(db: AsyncSession, final: AgentState) -> None:
     caso_id = final.get("caso_id") or await _abrir_caso(db, final)
     if caso_id is None:
-        final["respuesta"] = con_aviso_de_seguridad(final["mensaje"], final.get("respuesta"))
+        final["respuesta"] = con_aviso_de_seguridad(
+            final["mensaje"], con_tildes(final.get("respuesta"))
+        )
         return
     # Que el canal reciba el id: la respuesta al ciudadano lo referencia.
     final["caso_id"] = caso_id
@@ -365,8 +368,10 @@ async def _persistir_resultado(db: AsyncSession, final: AgentState) -> None:
         # Antes de persistir y de que el canal lo transmita: el ciudadano tiene
         # que saber que le contesta una IA. Por conversación y canal, no por
         # caso — si va cambiando de tema abre un caso por mensaje.
+        # Las tildes van antes que los avisos fijos, que ya vienen bien escritos:
+        # lo que se corrige es lo que redactó el modelo o copió del vecino.
         final["respuesta"] = await anteponer_aviso(
-            db, uuid.UUID(final["ciudadano_id"]), canal, final["respuesta"]
+            db, uuid.UUID(final["ciudadano_id"]), canal, con_tildes(final["respuesta"])
         )
         # Después del aviso de IA, para que quede primero: quien cuenta una
         # emergencia tiene que leer el número antes que cualquier otra cosa.

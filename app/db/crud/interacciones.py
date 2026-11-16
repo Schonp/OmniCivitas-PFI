@@ -82,8 +82,9 @@ async def ultimo_mensaje_al_ciudadano(
     """Momento de lo último que el organismo le mandó al ciudadano en el caso.
 
     Cuenta tanto lo del agente como lo del operador, y deja afuera las notas
-    internas, que el ciudadano nunca vio. Lo usa el nodo de espera para no
-    repetirle el acuse de recibo a los dos minutos de haberle avisado.
+    internas, que el ciudadano nunca vio. Lo usa el agente de contexto para
+    decidir si una cortesía sigue el hilo del caso; el nodo de espera usa
+    `ultimo_saliente_con_canal`, porque además le importa el canal.
     """
     consulta = (
         select(Interaccion.timestamp)
@@ -96,6 +97,30 @@ async def ultimo_mensaje_al_ciudadano(
         .limit(1)
     )
     return (await db.execute(consulta)).scalars().first()
+
+
+async def ultimo_saliente_con_canal(
+    db: AsyncSession, caso_id: uuid.UUID
+) -> tuple[datetime, Canal] | None:
+    """Lo último que el organismo le mandó al ciudadano en el caso, con el canal
+    por el que salió.
+
+    Mismo criterio que `ultimo_mensaje_al_ciudadano` (agente u operador, sin
+    notas internas), pero el nodo de espera necesita además el canal: un aviso
+    que salió por la llamada no lo vio en el chat de WhatsApp.
+    """
+    consulta = (
+        select(Interaccion.timestamp, Interaccion.canal)
+        .where(
+            Interaccion.caso_id == caso_id,
+            Interaccion.actor != ActorInteraccion.ciudadano,
+            Interaccion.interna.is_(False),
+        )
+        .order_by(Interaccion.timestamp.desc())
+        .limit(1)
+    )
+    fila = (await db.execute(consulta)).first()
+    return (fila.timestamp, fila.canal) if fila is not None else None
 
 
 async def primeros_mensajes_de_casos(

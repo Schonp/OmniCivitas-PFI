@@ -4,6 +4,7 @@ from typing import Literal
 from langchain_core.tools import ToolException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.ortografia import con_tildes
 from app.db.crud.auditoria import registrar_auditoria
 from app.db.crud.ciudadanos import obtener_ciudadano_por_id
 from app.db.models import ActorInteraccion, Canal, Caso, TipoCaso
@@ -35,6 +36,11 @@ async def crear_reclamo(
 ) -> dict:
     if await obtener_ciudadano_por_id(db, ciudadano_id) is None:
         raise ToolException("Ciudadano no encontrado")
+
+    # La descripción sale de las palabras del vecino y se le repite en la
+    # confirmación y en cada consulta de estado: se guarda con las tildes que le
+    # falten ("arbol caido" -> "árbol caído"), ver `app/core/ortografia.py`.
+    descripcion = con_tildes(descripcion) or descripcion
 
     # Si la conversación ya tenía un caso abierto para este reclamo —lo abrió
     # `_abrir_caso` en el primer mensaje, cuando todavía faltaba un dato para

@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.state import AgentState
 from app.core.config import settings
 from app.db.crud.auditoria import registrar_auditoria
-from app.db.crud.interacciones import ultimo_mensaje_al_ciudadano
+from app.db.crud.interacciones import ultimo_saliente_con_canal
 from app.db.models import ActorInteraccion, Caso
 from app.tools import ACTOR_AGENTE
 
@@ -58,6 +58,27 @@ def contacto_reciente(ultimo_saliente: datetime | None) -> bool:
     return datetime.now(timezone.utc) - ultimo_saliente < ventana
 
 
+async def _ya_le_avisaron_por_este_canal(
+    db: AsyncSession, caso_id: uuid.UUID, canal: str | None
+) -> bool:
+    """True si el agente puede callarse: lo último que le dijo el organismo es
+    reciente y salió por el mismo canal por el que ahora escribe.
+
+    El canal importa porque el silencio solo se entiende si el ciudadano vio el
+    aviso. Pasó en una demo: pidió una persona por teléfono, la llamada le dijo
+    que lo iban a contactar, y a los pocos minutos escribió "hola" por WhatsApp.
+    Ahí lo último que había visto era la confirmación del reclamo, y el chat
+    quedó mudo durante la media hora de la ventana. Con otro canal se acusa
+    recibo una vez; ese acuse ya sale por el canal nuevo, así que lo que siga
+    por ahí vuelve a respetar la ventana.
+    """
+    ultimo = await ultimo_saliente_con_canal(db, caso_id)
+    if ultimo is None:
+        return False
+    momento, canal_del_aviso = ultimo
+    return canal_del_aviso.value == canal and contacto_reciente(momento)
+
+
 async def nodo_espera(state: AgentState, db: AsyncSession) -> dict:
     caso_id = state.get("caso_id")
     caso = await db.get(Caso, uuid.UUID(caso_id)) if caso_id else None
@@ -67,7 +88,7 @@ async def nodo_espera(state: AgentState, db: AsyncSession) -> dict:
         logger.warning("espera: no se encontró el caso en manos humanas")
         return {"respuesta": mensaje_espera(), "requiere_escalado": False}
 
-    silencio = contacto_reciente(await ultimo_mensaje_al_ciudadano(db, caso.id))
+    silencio = await _ya_le_avisaron_por_este_canal(db, caso.id, state.get("canal"))
 
     await registrar_auditoria(
         db,

@@ -1077,3 +1077,48 @@ Repetidas las conversaciones reales:
 
 Sigue haciendo falta la red del código para los avisos de emergencia y para los
 DNI inventados en el primer mensaje.
+
+## 2026-11-16 — Ensayo de la demo en vivo: WhatsApp mudo tras una derivación por teléfono
+
+En el ensayo de la demo (7 de noviembre) el recorrido fue: reclamo por un árbol
+caído por WhatsApp (REC-EC3C32B2), consulta del estado por el teléfono web y,
+en la misma llamada, pedido de hablar con una persona. El caso se derivó y se
+asignó a un operador. Después, dos "hola" por WhatsApp (a los 5 y a los 28
+minutos) no recibieron ninguna respuesta. La base muestra que llegaron, se
+guardaron en el caso y pasaron por el nodo de espera con `acuso_recibo: false`.
+
+### Causa
+
+No fue una falla sino la regla del nodo de espera, mal pensada para varios
+canales. Con el caso en manos de una persona, el agente se calla mientras lo
+último que le escribió el organismo sea más reciente que
+`agente_minutos_silencio_derivado` (30 minutos). Ese "último mensaje" se
+buscaba en cualquier canal: el aviso de la derivación salió por la llamada a
+las 15:42, y los dos "hola" cayeron dentro de la ventana. En el chat de
+WhatsApp, sin embargo, lo último que el vecino había visto era la confirmación
+del reclamo: nunca leyó que lo iban a contactar, y el chat quedó mudo.
+
+### Arreglo
+
+El silencio ahora exige que el último mensaje saliente sea reciente **y** haya
+salido por el mismo canal por el que escribe el ciudadano
+(`_ya_le_avisaron_por_este_canal` en `app/agents/espera.py`, con
+`ultimo_saliente_con_canal` en `app/db/crud/interacciones.py`). Si cambió de
+canal, se le acusa recibo una vez; ese acuse ya sale por el canal nuevo, así
+que lo que siga por ahí respeta la ventana. Test:
+`test_acusa_recibo_si_el_aviso_salio_por_otro_canal`.
+
+Para una demo conviene además bajar `AGENTE_MINUTOS_SILENCIO_DERIVADO` en el
+`.env` a 2 o 3 minutos, como ya sugiere `config.py`.
+
+### Tildes en lo que escribe el organismo
+
+En el mismo ensayo la confirmación dijo "su reclamo por arbol caido": la
+descripción sale de las palabras del vecino (`descripcion_del_ciudadano`) y
+hereda cómo las escribió. `app/core/ortografia.py` corrige una lista acotada de
+palabras frecuentes cuya forma sin tilde no existe en castellano ("arbol",
+"caido", "semaforo", "vehiculo"...) y las terminaciones "-cion" y "-sion" en
+singular. Deja afuera las que existen sin tilde con otro sentido ("publico",
+"transito", "esta", "mas", "numero"), los correos y los enlaces. Se aplica a la
+descripción al crear el reclamo (asunto y título) y a la respuesta final antes
+del aviso de IA. El mensaje del vecino se guarda tal como lo mandó.

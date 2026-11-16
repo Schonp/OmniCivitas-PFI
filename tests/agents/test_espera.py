@@ -361,6 +361,57 @@ async def test_vuelve_a_acusar_recibo_cuando_ya_paso_un_rato(
     assert final["respuesta"].endswith(mensaje_espera(caso.referencia))
 
 
+async def test_acusa_recibo_si_el_aviso_salio_por_otro_canal(
+    db_session, ciudadano, mock_llms, checkpointer_en_memoria, ventana_de_silencio
+):
+    """El bug de la demo: pidió una persona por teléfono y a los cinco minutos
+    escribió por otro canal. El aviso de la derivación lo escuchó en la llamada,
+    no lo leyó en este chat, y el agente se callaba igual: la ventana miraba lo
+    último que salió por cualquier canal."""
+    caso = Caso(
+        ciudadano_id=ciudadano.id,
+        tipo=TipoCaso.reclamo,
+        estado=EstadoCaso.en_progreso,
+        canal_origen=Canal.email,
+        canal_actual=Canal.voz,
+    )
+    db_session.add(caso)
+    await db_session.flush()
+    db_session.add(
+        Interaccion(
+            caso_id=caso.id,
+            contenido="Lo pongo en contacto con una persona del equipo.",
+            canal=Canal.voz,
+            actor=ActorInteraccion.agente_ia,
+            timestamp=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+    )
+    await db_session.commit()
+
+    mock_llms([ClasificacionIntent(intencion="consulta", entidades={}, confianza=0.9)] * 2)
+
+    primero = await procesar_mensaje(
+        db_session,
+        mensaje="hola",
+        canal=Canal.email,
+        identificador=ciudadano.email,
+        checkpointer=checkpointer_en_memoria,
+    )
+    assert primero["respuesta"].endswith(mensaje_espera(caso.referencia)), (
+        "en este canal nunca vio el aviso: se le acusa recibo"
+    )
+
+    # El acuse ya salió por este canal: insistir enseguida no lo repite.
+    segundo = await procesar_mensaje(
+        db_session,
+        mensaje="hola?",
+        canal=Canal.email,
+        identificador=ciudadano.email,
+        checkpointer=checkpointer_en_memoria,
+    )
+    assert segundo["respuesta"] is None
+
+
 async def test_un_tema_nuevo_no_se_lo_queda_el_caso_derivado(
     db_session, ciudadano, mock_llms, checkpointer_en_memoria
 ):
